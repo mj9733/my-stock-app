@@ -24,7 +24,7 @@ from streamlit_autorefresh import st_autorefresh
 # 1. 기본 설정 & CSS
 # ==========================================
 st.set_page_config(
-    page_title="내 주식 비서 Pro",
+    page_title="내 주식 비서 ver1.0",
     page_icon="📱",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -151,7 +151,7 @@ def show_guide():
     5. **📰 뉴스:** 한국 뉴스를 실시간으로 확인합니다.
     """)
 
-@st.dialog("📋 종목 관리 (Excel 방식)")
+@st.dialog("📋 종목 관리")
 def open_stock_manager():
     st.caption("아래 표를 클릭해서 종목을 관리하세요.")
     rows = []
@@ -293,7 +293,7 @@ elif selected_menu == "🔮 AI예측":
             sel_txt = st.selectbox("종목 선택", [f"{ticker_info[t][0]} ({t})" for t in tickers], label_visibility="collapsed")
             sel = sel_txt.split('(')[-1].replace(')', '')
         with c_opt:
-            model_type = st.selectbox("분석 모델", ["📏 선형(기본)", "↩️ 2차 곡선", "🌲 랜덤포레스트"], label_visibility="collapsed")
+            model_type = st.selectbox("분석 모델", ["📏 선형회귀", "↩️ 2차 곡선", "🌲 랜덤포레스트"], label_visibility="collapsed")
 
         if st.button("🤖 AI 미래 가격 예측", use_container_width=True):
             with st.spinner(f"{model_type}로 분석 중..."):
