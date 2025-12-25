@@ -24,7 +24,7 @@ from streamlit_autorefresh import st_autorefresh
 # 1. 기본 설정 & CSS
 # ==========================================
 st.set_page_config(
-    page_title="내 주식 비서 ver1.0",
+    page_title="주식 비서 ver1.0",
     page_icon="📱",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -196,7 +196,7 @@ now_kr = datetime.now()
 now_us = now_kr - timedelta(hours=14)
 
 with col_title:
-    st.subheader("🚀 내 주식 비서")
+    st.subheader("주식 비서 ver1.0")
     st.caption(f"🇰🇷 {now_kr.strftime('%y/%m/%d %H:%M')} | 🇺🇸 {now_us.strftime('%H:%M')} (NY)")
 
 with col_btns:
