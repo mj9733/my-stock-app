@@ -31,7 +31,7 @@ st.set_page_config(
 )
 
 # 1분 자동 갱신
-st_autorefresh(interval=60 * 1000, key="data_refresh")
+st_autorefresh(interval=5 * 60 * 1000, key="data_refresh")
 
 st.markdown("""
     <style>
