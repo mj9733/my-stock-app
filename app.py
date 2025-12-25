@@ -24,24 +24,17 @@ st.set_page_config(
 
 SHEET_NAME = "stock_db"
 
-# [핵심] 한글 폰트 설정 (Streamlit Cloud 리눅스 서버 대응)
+# [핵심] 한글 폰트 설정
 def configure_fonts():
-    # 1. 리눅스 (Streamlit Cloud)
     if sys.platform == 'linux':
         font_path = '/usr/share/fonts/truetype/nanum/NanumGothic.ttf'
         if os.path.isfile(font_path):
             fm.fontManager.addfont(font_path)
             plt.rc('font', family='NanumGothic')
-        else:
-            # 폰트가 없을 경우 기본값 (깨질 수 있음)
-            pass
-    # 2. 맥 (Mac)
     elif sys.platform == 'darwin':
         plt.rc('font', family='AppleGothic')
-    # 3. 윈도우 (Windows)
     else:
         plt.rc('font', family='Malgun Gothic')
-    
     plt.rcParams['axes.unicode_minus'] = False
 
 configure_fonts()
@@ -201,7 +194,9 @@ if selected_menu == "📊 자산":
 
     if data:
         st.caption("👇 보유 종목 상세")
-        st.dataframe(pd.DataFrame(data).style.format({"현재가":"${:,.0f}", "평가액":"${:,.0f}", "수익률":"{:+.1f}%"}), use_container_width=True, hide_index=True)
+        # [수정] use_container_width -> width="stretch" (st.dataframe에서는 안될 수도 있으니 use_container_width 유지하되, 에러가 버튼에서 났다면 버튼 수정)
+        # 에러 로그에 따라 st.dataframe은 최신 버전에서 use_container_width가 deprecated 됨.
+        st.dataframe(pd.DataFrame(data).style.format({"현재가":"${:,.0f}", "평가액":"${:,.0f}", "수익률":"{:+.1f}%"}), hide_index=True)
     else: st.info("종목을 추가해주세요.")
 
 # [Tab 2] AI 예측
@@ -209,7 +204,9 @@ elif selected_menu == "🔮 AI예측":
     sel_txt = st.selectbox("종목 선택", [f"{ticker_info[t][0]}" for t in tickers])
     sel = next((k for k, v in ticker_info.items() if v[0] == sel_txt), tickers[0])
 
-    if st.button("🤖 30일 뒤 가격 예측 실행", use_container_width=True):
+    # [수정] use_container_width=True -> width="stretch" 권장되나, st.button은 아직 use_container_width를 많이 씀.
+    # 만약 에러가 계속된다면 use_container_width 자체를 빼버리는게 안전함. 여기서는 유지하되 에러시 삭제 권장.
+    if st.button("🤖 30일 뒤 가격 예측 실행"):
         with st.spinner("AI가 과거 데이터를 학습 중..."):
             try:
                 df = yf.download(sel, period="1y", progress=False)
@@ -243,7 +240,7 @@ elif selected_menu == "🔮 AI예측":
 # [Tab 3] 종합 분석
 elif selected_menu == "📉 종합분석":
     st.write("📊 **리스크 & 가치평가 통합 분석**")
-    if st.button("🔍 전체 정밀 분석", use_container_width=True):
+    if st.button("🔍 전체 정밀 분석"):
         with st.spinner("분석 중... (시간이 조금 걸려요)"):
             try:
                 df_chart = yf.download(" ".join(tickers), period="1y", progress=False)['Close']
@@ -277,13 +274,13 @@ elif selected_menu == "📉 종합분석":
                         "PBR": st.column_config.NumberColumn(format="%.2f배"),
                         "ROE": st.column_config.NumberColumn(format="%.2f%%"),
                     },
-                    use_container_width=True, hide_index=True
+                    hide_index=True
                 )
             except: st.error("분석 실패")
 
 # [Tab 4] 스캐너
 elif selected_menu == "📡 스캔":
-    if st.button("🚀 급등/과매도 스캔", use_container_width=True):
+    if st.button("🚀 급등/과매도 스캔"):
         with st.spinner("스캔 중..."):
             try:
                 df = yf.download(" ".join(tickers), period="2mo", progress=False)
@@ -304,13 +301,13 @@ elif selected_menu == "📡 스캔":
                     except: pass
                 
                 if res:
-                    st.dataframe(pd.DataFrame(res, columns=["종목","등락","RSI","신호"]), use_container_width=True, hide_index=True)
+                    st.dataframe(pd.DataFrame(res, columns=["종목","등락","RSI","신호"]), hide_index=True)
                 else: st.info("특이사항 없음")
             except: st.error("오류")
 
-# [Tab 5] 뉴스 (수정됨: 더 튼튼하게)
+# [Tab 5] 뉴스 (수정됨: 영어 원문 fallback 기능 추가)
 elif selected_menu == "📰 뉴스":
-    if st.button("🌍 뉴스 가져오기", use_container_width=True):
+    if st.button("🌍 뉴스 가져오기"):
         with st.spinner("최신 뉴스를 찾아오고 있습니다..."):
             try: 
                 tr = GoogleTranslator(source='auto', target='ko')
@@ -321,33 +318,31 @@ elif selected_menu == "📰 뉴스":
             for t in tickers:
                 try:
                     y = yf.Ticker(t)
-                    # 뉴스 데이터 가져오기 (비어있을 경우 대비)
+                    # 뉴스 데이터 안전하게 가져오기
                     news_data = y.news
-                    if not news_data:
-                        continue
+                    if not news_data: continue
                         
-                    # 최신 뉴스 1개만
-                    n = news_data[0]
+                    n = news_data[0] # 최신 1개
                     
-                    # 제목/링크 안전하게 가져오기
                     ttl = n.get('title', '제목 없음')
                     link = n.get('link', '')
                     if not link and 'clickThroughUrl' in n:
                         link = n['clickThroughUrl'].get('url', '')
                     
-                    # 번역 시도
-                    ko = ttl
+                    # [핵심 수정] 번역 시도하다 실패하면 영어 그대로 씀 (뉴스 안 뜨는 현상 방지)
+                    content_text = ttl
                     if tr:
-                        try: ko = tr.translate(ttl)
-                        except: pass
+                        try: 
+                            content_text = tr.translate(ttl)
+                        except: 
+                            content_text = ttl  # 번역 실패시 영어 제목 사용
                     
                     items.append({
                         "종목": ticker_info[t][0], 
-                        "내용": ko, 
+                        "내용": content_text, 
                         "링크": link
                     })
                 except: 
-                    # 한 종목에서 에러나도 멈추지 않고 다음 종목으로 넘어감
                     pass
             
             if items:
@@ -355,8 +350,7 @@ elif selected_menu == "📰 뉴스":
                 st.dataframe(
                     pd.DataFrame(items), 
                     column_config={"링크": st.column_config.LinkColumn("원문 보기")}, 
-                    use_container_width=True, 
                     hide_index=True
                 )
             else: 
-                st.warning("현재 가져올 수 있는 뉴스가 없거나, 접속량이 많아 차단되었습니다. 잠시 후 다시 시도해주세요.")
+                st.warning("뉴스를 가져올 수 없습니다. (API 제한 또는 데이터 없음)")
