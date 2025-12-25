@@ -4,7 +4,9 @@ import yfinance as yf
 import json
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import gspread
+import os
 from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
 from sklearn.linear_model import LinearRegression
@@ -22,10 +24,24 @@ st.set_page_config(
 
 SHEET_NAME = "stock_db"
 
+# [핵심] 한글 폰트 설정 (Streamlit Cloud 리눅스 서버 대응)
 def configure_fonts():
-    if sys.platform == 'darwin': plt.rc('font', family='AppleGothic')
-    elif sys.platform == 'win32': plt.rc('font', family='Malgun Gothic')
-    else: plt.rc('font', family='NanumGothic') 
+    # 1. 리눅스 (Streamlit Cloud)
+    if sys.platform == 'linux':
+        font_path = '/usr/share/fonts/truetype/nanum/NanumGothic.ttf'
+        if os.path.isfile(font_path):
+            fm.fontManager.addfont(font_path)
+            plt.rc('font', family='NanumGothic')
+        else:
+            # 폰트가 없을 경우 기본값 (깨질 수 있음)
+            pass
+    # 2. 맥 (Mac)
+    elif sys.platform == 'darwin':
+        plt.rc('font', family='AppleGothic')
+    # 3. 윈도우 (Windows)
+    else:
+        plt.rc('font', family='Malgun Gothic')
+    
     plt.rcParams['axes.unicode_minus'] = False
 
 configure_fonts()
@@ -150,12 +166,18 @@ col_title.subheader("🚀 내 주식 비서")
 col_clock.caption(f"🕒 {now.strftime('%H:%M')}")
 
 # ==========================================
-# 5. 메인 탭 메뉴
+# 5. 메인 메뉴 (튕김 방지)
 # ==========================================
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 자산", "🔮 AI예측", "📉 종합분석", "📡 스캔", "📰 뉴스"])
+selected_menu = st.radio(
+    "메뉴 이동",
+    ["📊 자산", "🔮 AI예측", "📉 종합분석", "📡 스캔", "📰 뉴스"],
+    horizontal=True,
+    label_visibility="collapsed"
+)
+st.divider()
 
 # [Tab 1] 자산
-with tab1:
+if selected_menu == "📊 자산":
     macros = {"S&P500": "^GSPC", "나스닥": "^IXIC", "환율": "DX-Y.NYB"}
     mp = fetch_all_prices(list(macros.values()))
     c1, c2, c3 = st.columns(3)
@@ -182,20 +204,18 @@ with tab1:
         st.dataframe(pd.DataFrame(data).style.format({"현재가":"${:,.0f}", "평가액":"${:,.0f}", "수익률":"{:+.1f}%"}), use_container_width=True, hide_index=True)
     else: st.info("종목을 추가해주세요.")
 
-# [Tab 2] AI 예측 (요청하신 대로 명확하게!)
-with tab2:
+# [Tab 2] AI 예측
+elif selected_menu == "🔮 AI예측":
     sel_txt = st.selectbox("종목 선택", [f"{ticker_info[t][0]}" for t in tickers])
     sel = next((k for k, v in ticker_info.items() if v[0] == sel_txt), tickers[0])
 
     if st.button("🤖 30일 뒤 가격 예측 실행", use_container_width=True):
         with st.spinner("AI가 과거 데이터를 학습 중..."):
             try:
-                # 1. 데이터 학습
                 df = yf.download(sel, period="1y", progress=False)
                 df = df[['Close']].dropna(); df['D'] = np.arange(len(df))
                 model = LinearRegression().fit(df[['D']], df['Close'])
                 
-                # 2. 예측
                 curr = df['Close'].iloc[-1]
                 if hasattr(curr, 'item'): curr = curr.item()
                 
@@ -205,81 +225,64 @@ with tab2:
                 
                 pct = (pred - curr) / curr * 100
                 
-                # 3. 결과 표시 (나란히 비교)
                 col1, col2 = st.columns(2)
                 col1.metric("현재 가격", f"${curr:.2f}")
                 col2.metric("30일 뒤 예상", f"${pred:.2f}", f"{pct:+.2f}%")
                 
-                # 4. 차트
                 fig, ax = plt.subplots(figsize=(6, 3))
                 ax.plot(df.index, df['Close'], label='과거 주가')
                 ax.plot(df.index, model.predict(df[['D']]), '--', color='orange', label='추세선')
-                
-                # 미래 차트 연결
                 last_dt = df.index[-1]
                 future_dates = [last_dt + timedelta(days=i) for i in range(1, 31)]
                 ax.plot(future_dates, model.predict(fut_days), 'r-', linewidth=2, label='예측 구간')
-                
                 ax.legend()
                 ax.grid(True, linestyle='--', alpha=0.5)
                 st.pyplot(fig)
-                
             except Exception as e: st.error(f"예측 실패: {e}")
 
-# [Tab 3] 종합 분석 (리스크 + 펀더멘털 통합)
-with tab3:
-    st.write("📊 **리스크(MDD) & 가치평가(PER/PBR) 통합 분석**")
-    if st.button("🔍 전체 종목 정밀 분석", use_container_width=True):
-        with st.spinner("모든 종목의 재무제표와 차트를 분석 중입니다..."):
+# [Tab 3] 종합 분석
+elif selected_menu == "📉 종합분석":
+    st.write("📊 **리스크 & 가치평가 통합 분석**")
+    if st.button("🔍 전체 정밀 분석", use_container_width=True):
+        with st.spinner("분석 중... (시간이 조금 걸려요)"):
             try:
-                # 데이터 다운로드 (1년치)
                 df_chart = yf.download(" ".join(tickers), period="1y", progress=False)['Close']
-                
                 res = []
                 for t in tickers:
-                    # 1. 리스크 (MDD, 변동성)
                     s = df_chart[t] if len(tickers)>1 else df_chart
                     mdd = ((s - s.cummax()) / s.cummax()).min() * 100
                     vol = s.pct_change().std() * (252**0.5) * 100
-                    
-                    # 2. 펀더멘털 (PER, PBR, ROE) - API 호출
                     try:
                         info = yf.Ticker(t).info
                         per = info.get('trailingPE', 0)
                         pbr = info.get('priceToBook', 0)
                         roe = info.get('returnOnEquity', 0)
-                    except:
-                        per = 0; pbr = 0; roe = 0
+                    except: per=0; pbr=0; roe=0
                     
                     res.append({
                         "종목": ticker_info[t][0],
-                        "MDD(위험)": mdd,
+                        "MDD": mdd,
                         "변동성": vol,
                         "PER": per if per else 0,
                         "PBR": pbr if pbr else 0,
                         "ROE": roe * 100 if roe else 0
                     })
                 
-                # 표 표시
-                st.success("분석 완료!")
                 st.dataframe(
                     pd.DataFrame(res),
                     column_config={
-                        "MDD(위험)": st.column_config.NumberColumn(format="%.2f%%"),
+                        "MDD": st.column_config.NumberColumn(format="%.2f%%"),
                         "변동성": st.column_config.NumberColumn(format="%.2f%%"),
                         "PER": st.column_config.NumberColumn(format="%.2f배"),
                         "PBR": st.column_config.NumberColumn(format="%.2f배"),
                         "ROE": st.column_config.NumberColumn(format="%.2f%%"),
                     },
-                    use_container_width=True,
-                    hide_index=True
+                    use_container_width=True, hide_index=True
                 )
-                st.caption("💡 팁: 표를 옆으로 밀어서 모든 데이터를 확인하세요.")
-                
-            except Exception as e: st.error(f"분석 중 오류: {e}")
+            except: st.error("분석 실패")
 
 # [Tab 4] 스캐너
-with tab4:
+elif selected_menu == "📡 스캔":
     if st.button("🚀 급등/과매도 스캔", use_container_width=True):
         with st.spinner("스캔 중..."):
             try:
@@ -297,49 +300,63 @@ with tab4:
                         elif rsi<=30: sig = "💎과매도"
                         elif rsi>=70: sig = "⚠️과열"
                         
-                        if sig: 
-                            res.append([ticker_info[t][0], f"{pct:+.1f}%", f"{rsi:.0f}", sig])
+                        if sig: res.append([ticker_info[t][0], f"{pct:+.1f}%", f"{rsi:.0f}", sig])
                     except: pass
                 
                 if res:
                     st.dataframe(pd.DataFrame(res, columns=["종목","등락","RSI","신호"]), use_container_width=True, hide_index=True)
                 else: st.info("특이사항 없음")
-            except: st.error("데이터 오류")
+            except: st.error("오류")
 
-# [Tab 5] 뉴스
-with tab5:
+# [Tab 5] 뉴스 (수정됨: 더 튼튼하게)
+elif selected_menu == "📰 뉴스":
     if st.button("🌍 뉴스 가져오기", use_container_width=True):
-        with st.spinner("뉴스 분석 중..."):
-            try: tr = GoogleTranslator(source='auto', target='ko')
+        with st.spinner("최신 뉴스를 찾아오고 있습니다..."):
+            try: 
+                tr = GoogleTranslator(source='auto', target='ko')
             except: tr = None
-            items = []; tot = 0
-            pos = ['up','gain','buy','bull','strong']; neg = ['down','loss','sell','bear','weak']
+            
+            items = []
             
             for t in tickers:
                 try:
-                    y = yf.Ticker(t); news = y.news
-                    if not news: continue
-                    n = news[0]; ttl = n.get('title') or ""
-                    link = n.get('link') or ""
+                    y = yf.Ticker(t)
+                    # 뉴스 데이터 가져오기 (비어있을 경우 대비)
+                    news_data = y.news
+                    if not news_data:
+                        continue
+                        
+                    # 최신 뉴스 1개만
+                    n = news_data[0]
                     
+                    # 제목/링크 안전하게 가져오기
+                    ttl = n.get('title', '제목 없음')
+                    link = n.get('link', '')
+                    if not link and 'clickThroughUrl' in n:
+                        link = n['clickThroughUrl'].get('url', '')
+                    
+                    # 번역 시도
                     ko = ttl
-                    if tr: 
+                    if tr:
                         try: ko = tr.translate(ttl)
                         except: pass
                     
-                    sc = 0
-                    for w in pos: 
-                        if w in ttl.lower(): sc+=1
-                    for w in neg: 
-                        if w in ttl.lower(): sc-=1
-                    tot += sc
-                    
-                    sent = "😊" if sc>0 else ("😨" if sc<0 else "😐")
-                    items.append({"감성":sent, "종목":ticker_info[t][0], "내용":ko, "링크":link})
-                except: pass
+                    items.append({
+                        "종목": ticker_info[t][0], 
+                        "내용": ko, 
+                        "링크": link
+                    })
+                except: 
+                    # 한 종목에서 에러나도 멈추지 않고 다음 종목으로 넘어감
+                    pass
             
             if items:
-                msg = f"🔥 불장 (+{tot})" if tot>=3 else (f"❄️ 조심 ({tot})" if tot<=-3 else "😐 쏘쏘")
-                st.info(msg)
-                st.dataframe(pd.DataFrame(items), column_config={"링크": st.column_config.LinkColumn("원문")}, use_container_width=True, hide_index=True)
-            else: st.warning("뉴스 없음")
+                st.success(f"{len(items)}건의 뉴스를 가져왔습니다!")
+                st.dataframe(
+                    pd.DataFrame(items), 
+                    column_config={"링크": st.column_config.LinkColumn("원문 보기")}, 
+                    use_container_width=True, 
+                    hide_index=True
+                )
+            else: 
+                st.warning("현재 가져올 수 있는 뉴스가 없거나, 접속량이 많아 차단되었습니다. 잠시 후 다시 시도해주세요.")
