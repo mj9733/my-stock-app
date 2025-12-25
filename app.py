@@ -192,7 +192,8 @@ now_us = now_kr - timedelta(hours=14)
 
 with col_title:
     st.subheader("🚀 내 주식 비서")
-    st.caption(f"🇰🇷 {now_kr.strftime('%H:%M')} | 🇺🇸 {now_us.strftime('%H:%M')}")
+    # [수정] 날짜/시간 완벽 복구 ('25/01/01 12:00 형식)
+    st.caption(f"🇰🇷 {now_kr.strftime('%y/%m/%d %H:%M')} | 🇺🇸 {now_us.strftime('%H:%M')}(NY)")
 
 with col_btns:
     b1, b2 = st.columns(2)
@@ -209,13 +210,13 @@ st.divider()
 
 # [Tab 1] 자산
 if selected_menu == "📊 자산":
-    macros = {"S&P500": "^GSPC", "나스닥": "^IXIC", "달러": "DX-Y.NYB"}
+    macros = {"S&P500": "^GSPC", "나스닥": "^IXIC", "달러인덱스": "DX-Y.NYB"}
     mp = fetch_all_prices(list(macros.values()))
     
     c1, c2, c3 = st.columns(3)
     c1.metric("S&P500", f"{mp['^GSPC']:,.2f}")
     c2.metric("나스닥", f"{mp['^IXIC']:,.2f}")
-    c3.metric("달러", f"{mp['DX-Y.NYB']:,.2f}")
+    c3.metric("달러인덱스", f"{mp['DX-Y.NYB']:,.2f}")
     st.divider()
 
     tb = 0; te = 0; data = []
@@ -368,6 +369,7 @@ elif selected_menu == "📉 종합분석":
                     st.subheader(f"종합평가: {res_msg}")
                     if good_msgs: st.success("\n\n".join(good_msgs))
                     if bad_msgs: st.error("\n\n".join(bad_msgs))
+                    if not good_msgs and not bad_msgs: st.info("ℹ️ 특이사항 없음")
 
                     fin = t.quarterly_financials
                     if not fin.empty:
@@ -404,7 +406,7 @@ elif selected_menu == "📡 스캔":
                 else: st.info("특이사항 없음")
             except: st.error("오류")
 
-# [Tab 5] 뉴스 (수정: 이모티콘 변경 😐 -> 🤔)
+# [Tab 5] 뉴스
 elif selected_menu == "📰 뉴스":
     if st.button("🌍 뉴스 분석", use_container_width=True):
         with st.spinner("뉴스 분석 중..."):
@@ -426,7 +428,6 @@ elif selected_menu == "📰 뉴스":
                             if w in e.title: score -= 1
                         total_score += score
                         
-                        # [변경] 중립 이모티콘: 😐 -> 🤔
                         sent = "🤔"
                         if score > 0: sent = "😊"
                         elif score < 0: sent = "😨"
@@ -435,7 +436,6 @@ elif selected_menu == "📰 뉴스":
                 except: pass
             
             if items:
-                # 종합 결론
                 msg = ""
                 if total_score >= 3: msg = f"🔥 종합: 강력 매수 신호 (불장) (+{total_score})"
                 elif total_score > 0: msg = f"😊 종합: 긍정적 흐름 (+{total_score})"
@@ -444,7 +444,6 @@ elif selected_menu == "📰 뉴스":
                 else: msg = "🤔 종합: 관망세 (중립) (0)"
                 
                 st.info(msg)
-                
                 st.dataframe(
                     pd.DataFrame(items), 
                     column_config={
