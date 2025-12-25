@@ -11,12 +11,13 @@ import os
 import feedparser
 import urllib.parse
 from datetime import datetime, timedelta
-# [New] 다양한 AI 모델을 위한 라이브러리 추가
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.pipeline import make_pipeline
 import sys
+import warnings
+warnings.filterwarnings('ignore')
 from streamlit_autorefresh import st_autorefresh
 
 # ==========================================
@@ -42,6 +43,7 @@ st.markdown("""
         }
         div[data-testid="stDataFrame"] { font-size: 0.8rem; }
         div.stButton > button { width: 100%; }
+        /* 분석 텍스트 스타일 */
         .analysis-good { color: #2ca02c; font-weight: bold; font-size: 0.9rem; }
         .analysis-bad { color: #d62728; font-weight: bold; font-size: 0.9rem; }
         .analysis-neutral { color: gray; font-size: 0.9rem; }
@@ -143,7 +145,7 @@ def show_guide():
     st.write("### 탭별 기능 설명")
     st.markdown("""
     1. **📊 자산:** 수익률 순서대로 정렬하고, 소수점까지 정확하게 분석합니다.
-    2. **🔮 AI예측:** 다양한 모델(선형, 곡선, 랜덤포레스트)로 미래를 점쳐봅니다.
+    2. **🔮 AI예측:** 과거 데이터를 기반으로 30일 뒤 주가를 예측합니다.
     3. **📉 종합분석:** 재무제표를 뜯어보고 매수/매도 의견을 제시합니다.
     4. **📡 스캔:** '급등'하거나 '과매도'된 종목을 포착합니다.
     5. **📰 뉴스:** 한국 뉴스를 실시간으로 확인합니다.
@@ -282,7 +284,7 @@ if selected_menu == "📊 자산":
         )
     else: st.info("👆 종목을 추가하세요")
 
-# [Tab 2] AI 예측 (모델 선택 기능 추가)
+# [Tab 2] AI 예측
 elif selected_menu == "🔮 AI예측":
     if not tickers: st.warning("종목 없음")
     else:
@@ -291,7 +293,6 @@ elif selected_menu == "🔮 AI예측":
             sel_txt = st.selectbox("종목 선택", [f"{ticker_info[t][0]} ({t})" for t in tickers], label_visibility="collapsed")
             sel = sel_txt.split('(')[-1].replace(')', '')
         with c_opt:
-            # [New] AI 모델 선택 박스
             model_type = st.selectbox("분석 모델", ["📏 선형(기본)", "↩️ 2차 곡선", "🌲 랜덤포레스트"], label_visibility="collapsed")
 
         if st.button("🤖 AI 미래 가격 예측", use_container_width=True):
@@ -301,11 +302,9 @@ elif selected_menu == "🔮 AI예측":
                     if df.empty: raise Exception("데이터 부족")
                     df = df[['Close']].dropna()
                     
-                    # 학습 데이터 준비
                     X = np.arange(len(df)).reshape(-1, 1)
-                    y = df['Close'].values
+                    y = df['Close'].values.ravel()
                     
-                    # [핵심] 모델별 학습 로직
                     if "선형" in model_type:
                         model = LinearRegression()
                         model.fit(X, y)
@@ -314,33 +313,27 @@ elif selected_menu == "🔮 AI예측":
                         model = make_pipeline(PolynomialFeatures(2), LinearRegression())
                         model.fit(X, y)
                         trend_line = model.predict(X)
-                    else: # 랜덤 포레스트
+                    else:
                         model = RandomForestRegressor(n_estimators=100, random_state=42)
                         model.fit(X, y)
                         trend_line = model.predict(X)
 
                     curr = df['Close'].iloc[-1].item()
                     
-                    # 미래 예측
                     future_days = 30
                     future_X = np.arange(len(df), len(df) + future_days).reshape(-1, 1)
                     pred_y = model.predict(future_X)
                     pred_final = pred_y[-1]
                     pct = (pred_final - curr) / curr * 100
                     
-                    # 결과 표시
                     c1, c2 = st.columns(2)
                     c1.metric("현재 가격", f"${curr:.2f}")
                     c2.metric("30일 뒤 예상", f"${pred_final:.2f}", f"{pct:+.2f}%")
                     
-                    # 차트 그리기
                     fig, ax = plt.subplots(figsize=(6, 3))
-                    # 과거 실제 주가
                     ax.plot(df.index, df['Close'], label='실제 주가', color='gray', alpha=0.5)
-                    # 모델이 분석한 추세선
-                    ax.plot(df.index, trend_line, '--', label=f'AI 분석 ({model_type.split()[1]})', color='orange')
+                    ax.plot(df.index, trend_line, '--', label=f'AI 분석', color='orange')
                     
-                    # 미래 예측선 연결
                     last_dt = df.index[-1]
                     fdates = [last_dt + timedelta(days=i) for i in range(1, future_days + 1)]
                     ax.plot(fdates, pred_y, 'r-', linewidth=2, label='미래 예측')
@@ -349,15 +342,6 @@ elif selected_menu == "🔮 AI예측":
                     ax.legend()
                     ax.grid(True, alpha=0.3, linestyle='--')
                     st.pyplot(fig)
-                    
-                    # 모델별 코멘트
-                    if "선형" in model_type:
-                        st.caption("ℹ️ **선형 회귀:** 과거의 평균적인 추세를 직선으로 쭉 이어서 보여줍니다.")
-                    elif "2차" in model_type:
-                        st.caption("ℹ️ **2차 곡선:** 최근의 상승/하락 가속도를 반영해 둥글게 예측합니다.")
-                    else:
-                        st.caption("ℹ️ **랜덤 포레스트:** 과거의 복잡한 패턴을 학습했습니다. (보수적인 경향이 있음)")
-                        
                 except Exception as e: st.error(f"실패: {e}")
 
 # [Tab 3] 종합 분석
@@ -452,7 +436,7 @@ elif selected_menu == "📡 스캔":
                 else: st.info("특이사항 없음")
             except: st.error("오류")
 
-# [Tab 5] 뉴스
+# [Tab 5] 뉴스 (날짜/내용 최적화)
 elif selected_menu == "📰 뉴스":
     if st.button("🌍 뉴스 분석", use_container_width=True):
         with st.spinner("뉴스 분석 중..."):
@@ -467,6 +451,10 @@ elif selected_menu == "📰 뉴스":
                     feed = feedparser.parse(f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko")
                     if feed.entries:
                         e = feed.entries[0]
+                        # 날짜 포맷 (MM/DD)
+                        dt = datetime(*e.published_parsed[:6]) + timedelta(hours=9)
+                        date_str = dt.strftime("%m/%d")
+                        
                         score = 0
                         for w in pos_words: 
                             if w in e.title: score += 1
@@ -478,7 +466,12 @@ elif selected_menu == "📰 뉴스":
                         if score > 0: sent = "😊"
                         elif score < 0: sent = "😨"
                         
-                        items.append({"감성": sent, "종목": f"{ticker_info[t][0]}", "제목": e.title, "링크": e.link})
+                        items.append({
+                            "날짜": date_str,
+                            "감성": sent,
+                            "내용": e.title,
+                            "링크": e.link
+                        })
                 except: pass
             
             if items:
@@ -494,8 +487,10 @@ elif selected_menu == "📰 뉴스":
                 st.dataframe(
                     pd.DataFrame(items), 
                     column_config={
-                        "링크": st.column_config.LinkColumn("원문", display_text="보기"),
-                        "제목": st.column_config.TextColumn("제목", width="medium")
+                        "날짜": st.column_config.TextColumn("날짜", width="small"),
+                        "감성": st.column_config.TextColumn("감성", width="small"),
+                        "내용": st.column_config.TextColumn("뉴스 요약", width="large"),
+                        "링크": st.column_config.LinkColumn("원문", display_text="보기")
                     },
                     hide_index=True, use_container_width=True
                 )
