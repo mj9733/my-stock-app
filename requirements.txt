@@ -4,5 +4,5 @@ yfinance
 numpy
 matplotlib
 gspread
-deep-translator
 scikit-learn
+feedparser
