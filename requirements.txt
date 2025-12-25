@@ -6,3 +6,4 @@ matplotlib
 gspread
 scikit-learn
 feedparser
+streamlit-autorefresh
