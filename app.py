@@ -11,7 +11,11 @@ import os
 import feedparser
 import urllib.parse
 from datetime import datetime, timedelta
+# [New] 다양한 AI 모델을 위한 라이브러리 추가
 from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.pipeline import make_pipeline
 import sys
 from streamlit_autorefresh import st_autorefresh
 
@@ -38,7 +42,6 @@ st.markdown("""
         }
         div[data-testid="stDataFrame"] { font-size: 0.8rem; }
         div.stButton > button { width: 100%; }
-        /* 분석 텍스트 스타일 */
         .analysis-good { color: #2ca02c; font-weight: bold; font-size: 0.9rem; }
         .analysis-bad { color: #d62728; font-weight: bold; font-size: 0.9rem; }
         .analysis-neutral { color: gray; font-size: 0.9rem; }
@@ -140,7 +143,7 @@ def show_guide():
     st.write("### 탭별 기능 설명")
     st.markdown("""
     1. **📊 자산:** 수익률 순서대로 정렬하고, 소수점까지 정확하게 분석합니다.
-    2. **🔮 AI예측:** 과거 데이터를 기반으로 30일 뒤 주가를 예측합니다.
+    2. **🔮 AI예측:** 다양한 모델(선형, 곡선, 랜덤포레스트)로 미래를 점쳐봅니다.
     3. **📉 종합분석:** 재무제표를 뜯어보고 매수/매도 의견을 제시합니다.
     4. **📡 스캔:** '급등'하거나 '과매도'된 종목을 포착합니다.
     5. **📰 뉴스:** 한국 뉴스를 실시간으로 확인합니다.
@@ -192,8 +195,7 @@ now_us = now_kr - timedelta(hours=14)
 
 with col_title:
     st.subheader("🚀 내 주식 비서")
-    # [수정] 날짜/시간 완벽 복구 ('25/01/01 12:00 형식)
-    st.caption(f"🇰🇷 {now_kr.strftime('%y/%m/%d %H:%M')} | 🇺🇸 {now_us.strftime('%H:%M')}(NY)")
+    st.caption(f"🇰🇷 {now_kr.strftime('%y/%m/%d %H:%M')} | 🇺🇸 {now_us.strftime('%H:%M')} (NY)")
 
 with col_btns:
     b1, b2 = st.columns(2)
@@ -280,39 +282,83 @@ if selected_menu == "📊 자산":
         )
     else: st.info("👆 종목을 추가하세요")
 
-# [Tab 2] AI 예측
+# [Tab 2] AI 예측 (모델 선택 기능 추가)
 elif selected_menu == "🔮 AI예측":
     if not tickers: st.warning("종목 없음")
     else:
-        sel_txt = st.selectbox("종목 선택", [f"{ticker_info[t][0]} ({t})" for t in tickers])
-        sel = sel_txt.split('(')[-1].replace(')', '')
+        c_sel, c_opt = st.columns([2, 1])
+        with c_sel:
+            sel_txt = st.selectbox("종목 선택", [f"{ticker_info[t][0]} ({t})" for t in tickers], label_visibility="collapsed")
+            sel = sel_txt.split('(')[-1].replace(')', '')
+        with c_opt:
+            # [New] AI 모델 선택 박스
+            model_type = st.selectbox("분석 모델", ["📏 선형(기본)", "↩️ 2차 곡선", "🌲 랜덤포레스트"], label_visibility="collapsed")
 
-        if st.button("🤖 30일 뒤 예측", use_container_width=True):
-            with st.spinner("분석 중..."):
+        if st.button("🤖 AI 미래 가격 예측", use_container_width=True):
+            with st.spinner(f"{model_type}로 분석 중..."):
                 try:
                     df = yf.download(sel, period="1y", progress=False)
                     if df.empty: raise Exception("데이터 부족")
-                    df = df[['Close']].dropna(); df['D'] = np.arange(len(df))
-                    model = LinearRegression().fit(df[['D']], df['Close'])
+                    df = df[['Close']].dropna()
+                    
+                    # 학습 데이터 준비
+                    X = np.arange(len(df)).reshape(-1, 1)
+                    y = df['Close'].values
+                    
+                    # [핵심] 모델별 학습 로직
+                    if "선형" in model_type:
+                        model = LinearRegression()
+                        model.fit(X, y)
+                        trend_line = model.predict(X)
+                    elif "2차" in model_type:
+                        model = make_pipeline(PolynomialFeatures(2), LinearRegression())
+                        model.fit(X, y)
+                        trend_line = model.predict(X)
+                    else: # 랜덤 포레스트
+                        model = RandomForestRegressor(n_estimators=100, random_state=42)
+                        model.fit(X, y)
+                        trend_line = model.predict(X)
+
                     curr = df['Close'].iloc[-1].item()
-                    fut_days = np.arange(len(df), len(df)+30).reshape(-1,1)
-                    pred = model.predict(fut_days)[-1].item()
-                    pct = (pred - curr) / curr * 100
                     
+                    # 미래 예측
+                    future_days = 30
+                    future_X = np.arange(len(df), len(df) + future_days).reshape(-1, 1)
+                    pred_y = model.predict(future_X)
+                    pred_final = pred_y[-1]
+                    pct = (pred_final - curr) / curr * 100
+                    
+                    # 결과 표시
                     c1, c2 = st.columns(2)
-                    c1.metric("현재", f"${curr:.2f}")
-                    c2.metric("예상", f"${pred:.2f}", f"{pct:+.2f}%")
+                    c1.metric("현재 가격", f"${curr:.2f}")
+                    c2.metric("30일 뒤 예상", f"${pred_final:.2f}", f"{pct:+.2f}%")
                     
+                    # 차트 그리기
                     fig, ax = plt.subplots(figsize=(6, 3))
-                    ax.plot(df.index, df['Close'], label='현재')
-                    ax.plot(df.index, model.predict(df[['D']]), '--', color='orange')
-                    ax.xaxis.set_major_formatter(mdates.DateFormatter("'%y.%m"))
+                    # 과거 실제 주가
+                    ax.plot(df.index, df['Close'], label='실제 주가', color='gray', alpha=0.5)
+                    # 모델이 분석한 추세선
+                    ax.plot(df.index, trend_line, '--', label=f'AI 분석 ({model_type.split()[1]})', color='orange')
+                    
+                    # 미래 예측선 연결
                     last_dt = df.index[-1]
-                    fdates = [last_dt + timedelta(days=i) for i in range(1, 31)]
-                    ax.plot(fdates, model.predict(fut_days), 'r-', linewidth=2, label='예측')
-                    ax.legend(); ax.grid(True, alpha=0.3)
+                    fdates = [last_dt + timedelta(days=i) for i in range(1, future_days + 1)]
+                    ax.plot(fdates, pred_y, 'r-', linewidth=2, label='미래 예측')
+                    
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter("'%y.%m"))
+                    ax.legend()
+                    ax.grid(True, alpha=0.3, linestyle='--')
                     st.pyplot(fig)
-                except: st.error("실패")
+                    
+                    # 모델별 코멘트
+                    if "선형" in model_type:
+                        st.caption("ℹ️ **선형 회귀:** 과거의 평균적인 추세를 직선으로 쭉 이어서 보여줍니다.")
+                    elif "2차" in model_type:
+                        st.caption("ℹ️ **2차 곡선:** 최근의 상승/하락 가속도를 반영해 둥글게 예측합니다.")
+                    else:
+                        st.caption("ℹ️ **랜덤 포레스트:** 과거의 복잡한 패턴을 학습했습니다. (보수적인 경향이 있음)")
+                        
+                except Exception as e: st.error(f"실패: {e}")
 
 # [Tab 3] 종합 분석
 elif selected_menu == "📉 종합분석":
@@ -444,6 +490,7 @@ elif selected_menu == "📰 뉴스":
                 else: msg = "🤔 종합: 관망세 (중립) (0)"
                 
                 st.info(msg)
+                
                 st.dataframe(
                     pd.DataFrame(items), 
                     column_config={
