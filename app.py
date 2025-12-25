@@ -468,7 +468,7 @@ elif selected_menu == "📰 뉴스":
                         
                         items.append({
                             "날짜": date_str,
-                            "감성": sent,
+                            "평가": sent,
                             "내용": e.title,
                             "링크": e.link
                         })
