@@ -24,50 +24,44 @@ from streamlit_autorefresh import st_autorefresh
 # 1. 기본 설정 & CSS
 # ==========================================
 st.set_page_config(
-    page_title="주식 비서 ver1.0",
+    page_title="내 주식 비서 Pro",
     page_icon="📱",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# 1분 자동 갱신
+# 5분 자동 갱신 (300,000ms)
 st_autorefresh(interval=5 * 60 * 1000, key="data_refresh")
 
 st.markdown("""
     <style>
-        .block-container {
-            padding-top: 1rem !important;
-            padding-bottom: 3rem !important;
-            padding-left: 0.5rem !important;
-            padding-right: 0.5rem !important;
-        }
+        .block-container { padding-top: 1rem !important; padding-bottom: 3rem !important; }
         div[data-testid="stDataFrame"] { font-size: 0.8rem; }
         div.stButton > button { width: 100%; }
-        /* 분석 텍스트 스타일 */
-        .analysis-good { color: #2ca02c; font-weight: bold; font-size: 0.9rem; }
-        .analysis-bad { color: #d62728; font-weight: bold; font-size: 0.9rem; }
-        .analysis-neutral { color: gray; font-size: 0.9rem; }
     </style>
 """, unsafe_allow_html=True)
 
 SHEET_NAME = "stock_db"
 
-def configure_fonts():
-    if sys.platform == 'linux':
-        font_path = '/usr/share/fonts/truetype/nanum/NanumGothic.ttf'
-        if os.path.isfile(font_path):
-            fm.fontManager.addfont(font_path)
-            plt.rc('font', family='NanumGothic')
-    elif sys.platform == 'darwin':
-        plt.rc('font', family='AppleGothic')
-    else:
-        plt.rc('font', family='Malgun Gothic')
-    plt.rcParams['axes.unicode_minus'] = False
+# ==========================================
+# 2. 유저 식별 시스템 (이름만 입력)
+# ==========================================
+if "user_id" not in st.session_state:
+    st.session_state.user_id = ""
 
-configure_fonts()
+if not st.session_state.user_id:
+    st.title("🚀 주식 비서 접속")
+    user_input = st.text_input("사용자 이름을 입력하세요 (예: 홍길동)", placeholder="본인의 이름을 입력하면 데이터가 따로 저장됩니다.")
+    if st.button("접속하기"):
+        if user_input.strip():
+            st.session_state.user_id = user_input.strip()
+            st.rerun()
+        else:
+            st.error("이름을 입력해 주세요.")
+    st.stop() # 이름 입력 전까지 아래 내용 숨김
 
 # ==========================================
-# 2. 데이터 핸들링
+# 3. 데이터 핸들링
 # ==========================================
 @st.cache_resource
 def get_google_sheet():
@@ -83,55 +77,54 @@ def load_portfolio_gs():
     if not sheet: return {}, {}
     try:
         data = sheet.get_all_records()
-        if not data: return {}, {}
         my_portfolio = {}
         ticker_info = {}
+        
+        # [핵심] 현재 접속한 유저의 데이터만 필터링
         for row in data:
-            keys = {k.lower().strip(): k for k in row.keys()}
-            t_key = keys.get('ticker')
-            if not t_key: continue
-            t = str(row[t_key]).strip().upper()
-            if not t: continue
-            qty = int(row.get(keys.get('qty', 'Qty'), 0) or 0)
-            avg = float(row.get(keys.get('avg', 'Avg'), 0.0) or 0.0)
-            name = str(row.get(keys.get('name', 'Name'), t))
-            desc = str(row.get(keys.get('desc', 'Desc'), '-'))
-            my_portfolio[t] = [qty, avg]
-            ticker_info[t] = [name, desc]
+            if str(row.get('User')) == st.session_state.user_id:
+                t = str(row['Ticker']).strip().upper()
+                my_portfolio[t] = [int(row['Qty']), float(row['Avg'])]
+                ticker_info[t] = [str(row['Name']), "-"]
         return my_portfolio, ticker_info
     except: return {}, {}
 
-def save_portfolio_gs(my_portfolio, ticker_info):
+def save_portfolio_gs(new_portfolio, new_info):
     sheet = get_google_sheet()
     if not sheet: return
     try:
-        rows = []
-        for t, val in my_portfolio.items():
+        all_data = sheet.get_all_records()
+        # 다른 사람의 데이터는 유지
+        other_data = [row for row in all_data if str(row.get('User')) != st.session_state.user_id]
+        
+        new_rows = []
+        for t, val in new_portfolio.items():
             qty, avg = val
-            info = ticker_info.get(t, [t, "-"])
-            rows.append([t, info[0], info[1], qty, avg])
+            name = new_info.get(t, [t])[0]
+            new_rows.append([st.session_state.user_id, t, name, "-", qty, avg])
+        
         sheet.clear()
-        sheet.append_row(["Ticker", "Name", "Desc", "Qty", "Avg"])
-        if rows: sheet.append_rows(rows)
+        sheet.append_row(["User", "Ticker", "Name", "Desc", "Qty", "Avg"])
+        if other_data:
+            for r in other_data: sheet.append_row(list(r.values()))
+        if new_rows:
+            sheet.append_rows(new_rows)
     except: pass
 
 my_portfolio, ticker_info = load_portfolio_gs()
 
 @st.cache_data(ttl=50)
-def get_stock_price(ticker):
-    try:
-        t = yf.Ticker(ticker)
-        p = t.fast_info.get('last_price', None)
-        if p is None:
-            hist = t.history(period="1d")
-            if not hist.empty: p = hist['Close'].iloc[-1]
-        return p if p else 0.0
-    except: return 0.0
-
-@st.cache_data(ttl=50) 
 def fetch_all_prices(tickers):
     prices = {}
-    for t in tickers: prices[t] = get_stock_price(t)
+    for t in tickers:
+        try:
+            stock = yf.Ticker(t)
+            p = stock.fast_info.get('last_price', 0.0)
+            if p == 0:
+                hist = stock.history(period="1d")
+                p = hist['Close'].iloc[-1] if not hist.empty else 0.0
+            prices[t] = p
+        except: prices[t] = 0.0
     return prices
 
 tickers = list(my_portfolio.keys())
