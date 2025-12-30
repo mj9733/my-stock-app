@@ -258,20 +258,97 @@ elif selected_menu == "🔮 AI예측":
                     ax.legend(); ax.grid(True, alpha=0.3); st.pyplot(fig)
                 except Exception as e: st.error(f"오류: {e}")
 
-# [Tab 5] 뉴스
+# [Tab 5] 뉴스 (감성 분석 강화 버전)
 elif selected_menu == "📰 뉴스":
-    if st.button("🌍 최신 뉴스 분석", use_container_width=True):
-        with st.spinner("뉴스 분석 중..."):
+    if st.button("🌍 AI 뉴스 분석 실행", use_container_width=True):
+        with st.spinner("최신 뉴스를 가져와 시장 심리를 분석 중입니다..."):
+            # 1. 감성 사전 및 가중치 설정
+            pos_dict = {
+                '상승': 1, '호재': 2, '급등': 3, '폭등': 3, '상한가': 3, '최고': 2, '수익': 1, 
+                '성장': 1, '흑자': 2, '돌파': 2, '기대': 1, '매수': 1, '강세': 1, '수주': 2,
+                '배당': 1, '자사주': 2, '영업익': 1, '개선': 1, '신고가': 3, '반등': 1
+            }
+            neg_dict = {
+                '하락': -1, '악재': -2, '급락': -3, '폭락': -3, '하한가': -3, '최저': -2, '손실': -1, 
+                '감소': -1, '적자': -2, '이탈': -2, '우려': -1, '매도': -1, '약세': -1, '규제': -2,
+                '조사': -1, '소송': -2, '공매도': -1, '축소': -1, '신저가': -3, '투매': -3
+            }
+
             items = []
+            total_sentiment_score = 0
+            
             for t in tickers:
-                q = urllib.parse.quote(f"{ticker_info[t][0]} {t}")
-                feed = feedparser.parse(f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko")
-                if feed.entries:
-                    e = feed.entries[0]
-                    dt = datetime(*e.published_parsed[:6]) + timedelta(hours=9)
-                    items.append({"날짜": dt.strftime("%m/%d"), "종목": ticker_info[t][0], "뉴스 요약": e.title, "링크": e.link})
+                try:
+                    name = ticker_info[t][0]
+                    q = urllib.parse.quote(f"{name} {t}")
+                    feed = feedparser.parse(f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko")
+                    
+                    if feed.entries:
+                        e = feed.entries[0] # 가장 최신 뉴스 1건 분석
+                        title = e.title
+                        
+                        # 점수 계산
+                        score = 0
+                        for word, weight in pos_dict.items():
+                            if word in title: score += weight
+                        for word, weight in neg_dict.items():
+                            if word in title: score += weight
+                        
+                        total_sentiment_score += score
+                        
+                        # 뉴스별 상태 판별
+                        if score >= 2: status = "🔥 강력호재"
+                        elif score == 1: status = "😊 긍정"
+                        elif score <= -2: status = "🚨 악재주의"
+                        elif score == -1: status = "😨 부정"
+                        else: status = "🤔 중립"
+                        
+                        dt = datetime(*e.published_parsed[:6]) + timedelta(hours=9)
+                        items.append({
+                            "날짜": dt.strftime("%m/%d %H:%M"),
+                            "종목": name,
+                            "상태": status,
+                            "점수": score,
+                            "뉴스 요약": title,
+                            "링크": e.link
+                        })
+                except: pass
+
             if items:
-                st.dataframe(pd.DataFrame(items), column_config={"링크": st.column_config.LinkColumn("원문")}, hide_index=True, use_container_width=True)
-            else: st.warning("뉴스가 없습니다.")
+                # 2. 종합 심리 점수 시각화
+                st.subheader("📊 오늘의 포트폴리오 심리 온도")
+                
+                # 점수 정규화 (보통 -10 ~ +10 사이로 제한하여 바 표시)
+                norm_score = max(min(total_sentiment_score, 10), -10)
+                display_pct = (norm_score + 10) / 20 # 0 ~ 1 사이 값으로 변환
+                
+                cols = st.columns([1, 4, 1])
+                cols[0].write("📉 **매우 공포**")
+                cols[1].progress(display_pct)
+                cols[2].write("📈 **매우 탐욕**")
+                
+                # 종합 메시지
+                if total_sentiment_score >= 5:
+                    st.success(f"현재 시장은 사용자님의 종목들에 대해 **매우 긍정적({total_sentiment_score}점)**입니다! 상승 흐름이 기대됩니다.")
+                elif total_sentiment_score <= -5:
+                    st.error(f"현재 시장에 **부정적인 뉴스({total_sentiment_score}점)**가 많습니다. 리스크 관리가 필요할 수 있습니다.")
+                else:
+                    st.info(f"현재 시장 심리는 **중립적({total_sentiment_score}점)**인 상태입니다.")
+
+                # 3. 상세 뉴스 리스트
+                st.divider()
+                st.dataframe(
+                    pd.DataFrame(items),
+                    column_config={
+                        "날짜": st.column_config.TextColumn("시간", width="small"),
+                        "상태": st.column_config.TextColumn("분석", width="small"),
+                        "점수": st.column_config.NumberColumn("강도", format="%d"),
+                        "뉴스 요약": st.column_config.TextColumn("최신 뉴스 제목", width="large"),
+                        "링크": st.column_config.LinkColumn("원문 보기", display_text="🔗")
+                    },
+                    hide_index=True, use_container_width=True
+                )
+            else:
+                st.warning("분석할 최신 뉴스가 없습니다.")
 
 # 나머지 탭(종합분석, 스캔)은 기존 Ver 30.0 로직과 동일하게 작동하도록 구성되었습니다.
