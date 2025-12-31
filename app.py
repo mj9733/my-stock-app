@@ -42,7 +42,7 @@ def fetch_safe_financials(ticker_symbol):
 st.set_page_config(page_title="내 주식 비서 Pro", page_icon="📱", layout="wide")
 
 # 5분 자동 갱신
-st_autorefresh(interval=5 * 60 * 1000, key="data_refresh")
+st_autorefresh(interval=60 * 60 * 1000, key="data_refresh")
 
 st.markdown("""
     <style>
