@@ -20,25 +20,21 @@ import warnings
 warnings.filterwarnings('ignore')
 from streamlit_autorefresh import st_autorefresh
 
-# [추가] 서버 차단을 피하기 위한 세션 생성 함수
+# [추가] 브라우저처럼 위장하여 차단을 피하는 세션 함수
 def get_safe_session():
     session = requests.Session()
     session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
     })
     return session
 
-# [추가] 재무 정보를 안전하게 가져오는 함수 (1시간 캐시)
+# [추가] 재무 정보 호출 시 1시간 동안 결과를 기억하여 서버 부하 감소
 @st.cache_data(ttl=3600)
-def fetch_financial_info(ticker_symbol):
+def fetch_safe_financials(ticker_symbol):
     try:
-        session = get_safe_session()
-        ticker = yf.Ticker(ticker_symbol, session=session)
-        # .info는 에러 발생 확률이 높으므로 한 번만 호출해서 변수에 저장
-        info = ticker.info
-        return info
-    except Exception:
-        # 에러 발생 시 빈 사전을 반환하여 앱 중단 방지
+        t = yf.Ticker(ticker_symbol, session=get_safe_session())
+        return t.info
+    except:
         return {}
 # ==========================================
 # 1. 기본 설정 & CSS
@@ -294,29 +290,30 @@ elif menu == "🔮 AI예측":
                 except Exception as e:
                     st.error(f"예측 중 오류가 발생했습니다: {e}")
 
-# [Tab 3] 종합분석 (안전한 버전)
+# [Tab 3] 종합분석 (개정본)
 elif menu == "📉 종합분석":
     if not tickers:
-        st.warning("분석할 종목이 없습니다. 관리 메뉴에서 종목을 추가해 주세요.")
+        st.warning("분석할 종목이 없습니다.")
     else:
-        st.info("ℹ️ 재무 정보는 서버 부하 방지를 위해 1시간 단위로 업데이트됩니다.")
-        
-        sel_txt = st.selectbox("진단할 종목을 선택하세요", [f"{ticker_info[t][0]} ({t})" for t in tickers])
+        sel_txt = st.selectbox("진단할 종목", [f"{ticker_info[t][0]} ({t})" for t in tickers])
         sel_ticker = sel_txt.split('(')[-1].replace(')', '')
         
         if st.button("🔍 상세 재무 진단 실행", use_container_width=True):
-            with st.spinner(f"{sel_ticker}의 재무 데이터를 정밀 분석 중입니다..."):
-                # 안전한 함수 호출
-                info = fetch_financial_info(sel_ticker)
+            with st.spinner("야후 서버에서 재무 데이터를 가져오는 중..."):
+                info = fetch_safe_financials(sel_ticker)
                 
                 if not info:
-                    st.error("현재 Yahoo Finance 서버 접속이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.")
+                    st.error("현재 야후 서버 접속이 일시적으로 제한되었습니다. 잠시 후 다시 시도해 주세요.")
                 else:
-                    # 데이터 추출
-                    per = info.get('trailingPE')
-                    pbr = info.get('priceToBook')
-                    roe = info.get('returnOnEquity')
-                    biz_summary = info.get('longBusinessSummary', '기업 설명 정보가 없습니다.')
+                    per = info.get('trailingPE', 0)
+                    pbr = info.get('priceToBook', 0)
+                    roe = info.get('returnOnEquity', 0)
+                    
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("PER", f"{per:.2f}" if per else "정보 없음")
+                    c2.metric("PBR", f"{pbr:.2f}" if pbr else "정보 없음")
+                    c3.metric("ROE", f"{roe*100:.2f}%" if roe else "정보 없음")
+                    st.write(f"**기업 요약:** {info.get('longBusinessSummary', '설명이 없습니다.')[:500]}...")
 
                     # 1. 주요 지표 표시 (Metric)
                     c1, c2, c3 = st.columns(3)
@@ -348,84 +345,47 @@ elif menu == "📉 종합분석":
                     except:
                         st.caption("실적 차트를 불러올 수 없습니다.")
 
-# [Tab 4] 스캔 (에러 방지 및 안전 버전)
+# [Tab 4] 스캔 (개정본)
 elif menu == "📡 스캔":
-    st.info("💡 보유하신 모든 종목의 기술적 지표를 분석합니다. (10분 단위 갱신)")
-    
-    if not tickers:
-        st.warning("스캔할 종목이 없습니다. 관리 메뉴에서 종목을 추가해 주세요.")
-    else:
-        if st.button("🚀 전체 종목 실시간 스캔 실행", use_container_width=True):
-            with st.spinner("모든 종목의 RSI 및 등락률을 계산 중입니다..."):
+    if st.button("🚀 전체 종목 기술적 지표 스캔", use_container_width=True):
+        if not tickers:
+            st.warning("종목이 없습니다.")
+        else:
+            with st.spinner("RSI 및 변동률 분석 중..."):
                 try:
-                    # 안전한 세션 생성
-                    session = get_safe_session() 
-                    
-                    # 데이터 한꺼번에 다운로드 (기간 2개월)
-                    # auto_adjust=True로 수정하여 데이터 정합성 높임
-                    df_all = yf.download(
-                        tickers, 
-                        period="2mo", 
-                        interval="1d", 
-                        group_by='ticker', 
-                        session=session, 
-                        progress=False,
-                        auto_adjust=True
-                    )
-                    
+                    # 세션을 사용하여 차단 방지
+                    df_all = yf.download(tickers, period="2mo", session=get_safe_session(), progress=False)
                     res = []
+                    
                     for t in tickers:
-                        try:
-                            # 1. 특정 종목 데이터 추출 (멀티인덱스 대응)
-                            if len(tickers) > 1:
-                                ticker_data = df_all[t]
-                            else:
-                                ticker_data = df_all
-                                
-                            c = ticker_data['Close'].dropna()
-                            
-                            # [핵심] 데이터가 비어있는지 확인하여 IndexError 방지
-                            if c.empty or len(c) < 15:
-                                continue
-                            
-                            # 2. 가격 및 등락률 계산
-                            curr_p = c.iloc[-1]
-                            prev_p = c.iloc[-2]
-                            pct = (curr_p - prev_p) / prev_p * 100
-                            
-                            # 3. RSI 계산 (14일 기준)
-                            diff = c.diff()
-                            up = diff.clip(lower=0).rolling(window=14).mean()
-                            down = -diff.clip(upper=0).rolling(window=14).mean()
-                            
-                            # 분모가 0이 되는 것을 방지
-                            rs = up / down
-                            rsi = 100 - (100 / (1 + rs.iloc[-1]))
-                            
-                            # 4. 신호 판별
-                            signal = ""
-                            if pct >= 3: signal = "🔥 급등"
-                            elif pct <= -3: signal = "📉 급락"
-                            
-                            if rsi <= 30: signal += " 💎 과매도"
-                            elif rsi >= 70: signal += " ⚠️ 과매수"
-                            
-                            name = ticker_info[t][0]
-                            res.append([f"{name}({t})", f"${curr_p:.2f}", f"{pct:+.2f}%", f"{rsi:.1f}", signal])
-                            
-                        except Exception:
-                            # 개별 종목 계산 실패 시 건너뜀
-                            continue
-                            
-                    if res:
-                        scan_df = pd.DataFrame(res, columns=["종목", "현재가", "등락률", "RSI", "분석 결과"])
-                        st.success(f"총 {len(res)}개 종목 분석 완료!")
-                        st.dataframe(scan_df, hide_index=True, use_container_width=True)
-                    else:
-                        st.info("현재 특이 신호가 포착된 종목이 없습니다.")
+                        # 종목별 데이터 추출
+                        ticker_data = df_all[t] if len(tickers) > 1 else df_all
+                        c = ticker_data['Close'].dropna()
                         
+                        # [핵심] 데이터가 부족하거나 없으면 건너뛰어 에러 방지
+                        if c.empty or len(c) < 15: 
+                            continue
+                        
+                        # 지표 계산
+                        p_now = c.iloc[-1]
+                        p_prev = c.iloc[-2]
+                        pct = (p_now - p_prev) / p_prev * 100
+                        
+                        # RSI 계산
+                        diff = c.diff()
+                        up = diff.clip(lower=0).rolling(14).mean()
+                        down = -diff.clip(upper=0).rolling(14).mean()
+                        rsi = 100 - (100 / (1 + (up / down).iloc[-1]))
+                        
+                        sig = "🔥급등" if pct >= 3 else ("💎과매도" if rsi <= 30 else "")
+                        res.append([t, f"{pct:+.2f}%", f"{rsi:.1f}", sig])
+                    
+                    if res:
+                        st.dataframe(pd.DataFrame(res, columns=["티커", "등락", "RSI", "신호"]), use_container_width=True)
+                    else:
+                        st.info("현재 분석 가능한 데이터가 부족합니다.")
                 except Exception as e:
-                    st.error(f"스캔 중 서버 통신 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
+                    st.error("데이터를 불러오는 중 문제가 발생했습니다. 관리자 설정을 확인하세요.")
 
 # [Tab 5] 뉴스 분석 (에러 방지 및 감성 분석 강화 버전)
 elif menu == "📰 뉴스":
