@@ -1,4 +1,5 @@
 import streamlit as st
+import requests
 import pandas as pd
 import yfinance as yf
 import numpy as np
@@ -19,6 +20,26 @@ import warnings
 warnings.filterwarnings('ignore')
 from streamlit_autorefresh import st_autorefresh
 
+# [추가] 서버 차단을 피하기 위한 세션 생성 함수
+def get_safe_session():
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1'
+    })
+    return session
+
+# [추가] 재무 정보를 안전하게 가져오는 함수 (1시간 캐시)
+@st.cache_data(ttl=3600)
+def fetch_financial_info(ticker_symbol):
+    try:
+        session = get_safe_session()
+        ticker = yf.Ticker(ticker_symbol, session=session)
+        # .info는 에러 발생 확률이 높으므로 한 번만 호출해서 변수에 저장
+        info = ticker.info
+        return info
+    except Exception:
+        # 에러 발생 시 빈 사전을 반환하여 앱 중단 방지
+        return {}
 # ==========================================
 # 1. 기본 설정 & CSS
 # ==========================================
@@ -273,18 +294,59 @@ elif menu == "🔮 AI예측":
                 except Exception as e:
                     st.error(f"예측 중 오류가 발생했습니다: {e}")
 
-# [Tab 3] 종합분석 (생략되었던 부분 복구)
+# [Tab 3] 종합분석 (안전한 버전)
 elif menu == "📉 종합분석":
-    if tickers:
-        sel = st.selectbox("진단할 종목", tickers)
-        if st.button("🔍 상세 진단"):
-            with st.spinner("재무제표 분석 중..."):
-                info = yf.Ticker(sel).info
-                c1, c2, c3 = st.columns(3)
-                c1.metric("PER", f"{info.get('trailingPE', 0):.2f}")
-                c2.metric("PBR", f"{info.get('priceToBook', 0):.2f}")
-                c3.metric("ROE", f"{info.get('returnOnEquity', 0)*100:.2f}%")
-                st.write(f"**기업 개요:** {info.get('longBusinessSummary', '정보 없음')[:300]}...")
+    if not tickers:
+        st.warning("분석할 종목이 없습니다. 관리 메뉴에서 종목을 추가해 주세요.")
+    else:
+        st.info("ℹ️ 재무 정보는 서버 부하 방지를 위해 1시간 단위로 업데이트됩니다.")
+        
+        sel_txt = st.selectbox("진단할 종목을 선택하세요", [f"{ticker_info[t][0]} ({t})" for t in tickers])
+        sel_ticker = sel_txt.split('(')[-1].replace(')', '')
+        
+        if st.button("🔍 상세 재무 진단 실행", use_container_width=True):
+            with st.spinner(f"{sel_ticker}의 재무 데이터를 정밀 분석 중입니다..."):
+                # 안전한 함수 호출
+                info = fetch_financial_info(sel_ticker)
+                
+                if not info:
+                    st.error("현재 Yahoo Finance 서버 접속이 원활하지 않습니다. 잠시 후 다시 시도해 주세요.")
+                else:
+                    # 데이터 추출
+                    per = info.get('trailingPE')
+                    pbr = info.get('priceToBook')
+                    roe = info.get('returnOnEquity')
+                    biz_summary = info.get('longBusinessSummary', '기업 설명 정보가 없습니다.')
+
+                    # 1. 주요 지표 표시 (Metric)
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("PER (주가수익비율)", f"{per:.2f}" if per else "N/A")
+                    c2.metric("PBR (주가순자산비율)", f"{pbr:.2f}" if pbr else "N/A")
+                    c3.metric("ROE (자기자본이익률)", f"{roe*100:.2f}%" if roe else "N/A")
+                    
+                    # 2. 투자 의견 자동 생성
+                    st.divider()
+                    score = 0
+                    if per and 0 < per < 20: score += 1
+                    if pbr and 0 < pbr < 1.5: score += 1
+                    if roe and roe > 0.15: score += 1
+                    
+                    status = "🟢 양호" if score >= 2 else ("🟡 보통" if score == 1 else "🔴 관망")
+                    st.subheader(f"AI 종합 진단 결과: {status}")
+                    
+                    # 3. 기업 개요 (접이식으로 깔끔하게)
+                    with st.expander("🏢 기업 개요 보기"):
+                        st.write(biz_summary)
+
+                    # 4. 분기 실적 차트
+                    try:
+                        ticker_obj = yf.Ticker(sel_ticker, session=get_safe_session())
+                        fin = ticker_obj.quarterly_financials
+                        if not fin.empty:
+                            st.write("### 📊 최근 분기 실적 추이")
+                            st.bar_chart(fin.loc['Total Revenue'])
+                    except:
+                        st.caption("실적 차트를 불러올 수 없습니다.")
 
 # [Tab 4] 스캔 (생략되었던 부분 복구)
 elif menu == "📡 스캔":
