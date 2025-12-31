@@ -348,20 +348,84 @@ elif menu == "📉 종합분석":
                     except:
                         st.caption("실적 차트를 불러올 수 없습니다.")
 
-# [Tab 4] 스캔 (생략되었던 부분 복구)
+# [Tab 4] 스캔 (에러 방지 및 안전 버전)
 elif menu == "📡 스캔":
-    if st.button("🚀 전체 종목 스캔"):
-        with st.spinner("RSI 및 급등주 찾는 중..."):
-            df = yf.download(tickers, period="2mo", progress=False)['Close']
-            res = []
-            for t in tickers:
-                c = df[t].dropna(); p = c.iloc[-1]
-                pct = (p - c.iloc[-2])/c.iloc[-2]*100
-                diff = c.diff(); up = diff.clip(lower=0).rolling(14).mean(); down = -diff.clip(upper=0).rolling(14).mean()
-                rsi = 100 - (100/(1 + up/down)).iloc[-1]
-                sig = "🔥급등" if pct >= 3 else ("💎과매도" if rsi <= 30 else "")
-                if sig: res.append([t, f"{pct:+.2f}%", f"{rsi:.1f}", sig])
-            st.dataframe(pd.DataFrame(res, columns=["티커", "등락", "RSI", "신호"]) if res else "특이사항 없음")
+    st.info("💡 보유하신 모든 종목의 기술적 지표를 분석합니다. (10분 단위 갱신)")
+    
+    if not tickers:
+        st.warning("스캔할 종목이 없습니다. 관리 메뉴에서 종목을 추가해 주세요.")
+    else:
+        if st.button("🚀 전체 종목 실시간 스캔 실행", use_container_width=True):
+            with st.spinner("모든 종목의 RSI 및 등락률을 계산 중입니다..."):
+                try:
+                    # 안전한 세션 생성
+                    session = get_safe_session() 
+                    
+                    # 데이터 한꺼번에 다운로드 (기간 2개월)
+                    # auto_adjust=True로 수정하여 데이터 정합성 높임
+                    df_all = yf.download(
+                        tickers, 
+                        period="2mo", 
+                        interval="1d", 
+                        group_by='ticker', 
+                        session=session, 
+                        progress=False,
+                        auto_adjust=True
+                    )
+                    
+                    res = []
+                    for t in tickers:
+                        try:
+                            # 1. 특정 종목 데이터 추출 (멀티인덱스 대응)
+                            if len(tickers) > 1:
+                                ticker_data = df_all[t]
+                            else:
+                                ticker_data = df_all
+                                
+                            c = ticker_data['Close'].dropna()
+                            
+                            # [핵심] 데이터가 비어있는지 확인하여 IndexError 방지
+                            if c.empty or len(c) < 15:
+                                continue
+                            
+                            # 2. 가격 및 등락률 계산
+                            curr_p = c.iloc[-1]
+                            prev_p = c.iloc[-2]
+                            pct = (curr_p - prev_p) / prev_p * 100
+                            
+                            # 3. RSI 계산 (14일 기준)
+                            diff = c.diff()
+                            up = diff.clip(lower=0).rolling(window=14).mean()
+                            down = -diff.clip(upper=0).rolling(window=14).mean()
+                            
+                            # 분모가 0이 되는 것을 방지
+                            rs = up / down
+                            rsi = 100 - (100 / (1 + rs.iloc[-1]))
+                            
+                            # 4. 신호 판별
+                            signal = ""
+                            if pct >= 3: signal = "🔥 급등"
+                            elif pct <= -3: signal = "📉 급락"
+                            
+                            if rsi <= 30: signal += " 💎 과매도"
+                            elif rsi >= 70: signal += " ⚠️ 과매수"
+                            
+                            name = ticker_info[t][0]
+                            res.append([f"{name}({t})", f"${curr_p:.2f}", f"{pct:+.2f}%", f"{rsi:.1f}", signal])
+                            
+                        except Exception:
+                            # 개별 종목 계산 실패 시 건너뜀
+                            continue
+                            
+                    if res:
+                        scan_df = pd.DataFrame(res, columns=["종목", "현재가", "등락률", "RSI", "분석 결과"])
+                        st.success(f"총 {len(res)}개 종목 분석 완료!")
+                        st.dataframe(scan_df, hide_index=True, use_container_width=True)
+                    else:
+                        st.info("현재 특이 신호가 포착된 종목이 없습니다.")
+                        
+                except Exception as e:
+                    st.error(f"스캔 중 서버 통신 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
 
 # [Tab 5] 뉴스 (강화된 감성 분석 버전)
 elif menu == "📰 뉴스":
