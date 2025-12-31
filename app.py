@@ -427,19 +427,98 @@ elif menu == "📡 스캔":
                 except Exception as e:
                     st.error(f"스캔 중 서버 통신 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.")
 
-# [Tab 5] 뉴스 (강화된 감성 분석 버전)
+# [Tab 5] 뉴스 분석 (에러 방지 및 감성 분석 강화 버전)
 elif menu == "📰 뉴스":
-    # (앞서 설명한 강화된 뉴스 분석 로직 전체 포함)
-    pos_dict = {'상승':1, '호재':2, '급등':3, '수익':1, '최고':2, '흑자':2}
-    neg_dict = {'하락':-1, '악재':-2, '급락':-3, '손실':-1, '적자':-2}
-    if st.button("🌍 AI 뉴스 분석"):
-        items = []
-        for t in tickers:
-            q = urllib.parse.quote(f"{ticker_info[t][0]} {t}")
-            feed = feedparser.parse(f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko")
-            if feed.entries:
-                e = feed.entries[0]; score = 0
-                for w, v in pos_dict.items(): score += v if w in e.title else 0
-                for w, v in neg_dict.items(): score += v if w in e.title else 0
-                items.append({"종목": ticker_info[t][0], "분석": "😊" if score>0 else ("😨" if score<0 else "🤔"), "제목": e.title, "링크": e.link})
-        st.dataframe(pd.DataFrame(items), column_config={"링크": st.column_config.LinkColumn("🔗")}, hide_index=True)
+    st.info("🌍 AI가 실시간 뉴스를 분석하여 시장의 긍정/부정 심리를 점수화합니다. (20분 단위 갱신)")
+    
+    if not tickers:
+        st.warning("분석할 종목이 없습니다. 관리 메뉴에서 종목을 추가해 주세요.")
+    else:
+        if st.button("🌍 최신 뉴스 감성 분석 실행", use_container_width=True):
+            with st.spinner("보유 종목 관련 최신 뉴스를 수집하고 분석 중입니다..."):
+                try:
+                    # 1. 감성 사전 및 가중치 설정
+                    pos_dict = {'상승':1, '호재':2, '급등':3, '폭등':3, '수익':1, '최고':2, '흑자':2, '돌파':1, '배당':1, '성장':1}
+                    neg_dict = {'하락':-1, '악재':-2, '급락':-3, '폭락':-3, '손실':-1, '적자':-2, '우려':-1, '이탈':-1, '규제':-2, '적자':-2}
+
+                    items = []
+                    total_sentiment_score = 0
+                    
+                    for t in tickers:
+                        try:
+                            # 종목명과 티커로 검색 쿼리 생성
+                            stock_name = ticker_info[t][0]
+                            q = urllib.parse.quote(f"{stock_name} {t}")
+                            
+                            # Google News RSS 피드 가져오기
+                            feed_url = f"https://news.google.com/rss/search?q={q}&hl=ko&gl=KR&ceid=KR:ko"
+                            feed = feedparser.parse(feed_url)
+                            
+                            # [핵심] 뉴스 검색 결과가 있는지 확인하여 IndexError 방지
+                            if not feed.entries:
+                                continue
+                                
+                            # 가장 최신 뉴스 1건 분석
+                            e = feed.entries[0]
+                            title = e.title
+                            
+                            # 감성 점수 계산
+                            score = 0
+                            for word, weight in pos_dict.items():
+                                if word in title: score += weight
+                            for word, weight in neg_dict.items():
+                                if word in title: score += weight
+                            
+                            total_sentiment_score += score
+                            
+                            # 상태 판별
+                            if score >= 2: status = "🔥 강력호재"
+                            elif score == 1: status = "😊 긍정"
+                            elif score <= -2: status = "🚨 악재주의"
+                            elif score == -1: status = "😨 부정"
+                            else: status = "🤔 중립"
+                            
+                            # 날짜 처리 (KST 기준)
+                            dt = datetime(*e.published_parsed[:6]) + timedelta(hours=9)
+                            
+                            items.append({
+                                "시간": dt.strftime("%m/%d %H:%M"),
+                                "종목": stock_name,
+                                "심리": status,
+                                "점수": score,
+                                "뉴스 제목": title,
+                                "링크": e.link
+                            })
+                        except Exception:
+                            # 개별 뉴스 처리 실패 시 해당 종목만 건너뜀
+                            continue
+
+                    if items:
+                        # 2. 종합 심리 지수 표시
+                        st.subheader("📊 오늘의 포트폴리오 심리 온도")
+                        
+                        # 점수를 0~1 사이로 정규화하여 바(Bar) 표시
+                        norm_score = max(min(total_sentiment_score, 10), -10)
+                        gauge_val = (norm_score + 10) / 20 
+                        
+                        c1, c2, c3 = st.columns([1, 4, 1])
+                        c1.write("📉 **매우 공포**")
+                        c2.progress(gauge_val)
+                        c3.write("📈 **매우 탐욕**")
+                        
+                        # 3. 상세 결과 표
+                        st.divider()
+                        df_news = pd.DataFrame(items)
+                        st.dataframe(
+                            df_news,
+                            column_config={
+                                "점수": st.column_config.NumberColumn("강도", format="%d"),
+                                "링크": st.column_config.LinkColumn("원문", display_text="🔗")
+                            },
+                            hide_index=True, use_container_width=True
+                        )
+                    else:
+                        st.warning("현재 보유 종목에 대한 최신 뉴스를 찾을 수 없습니다.")
+                        
+                except Exception as e:
+                    st.error(f"뉴스 수집 중 오류가 발생했습니다: {e}")
