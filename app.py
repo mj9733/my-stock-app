@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import requests
 import gspread
+import yfinance as yf  # 누락되었던 임포트 추가
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import feedparser
@@ -20,26 +21,38 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# 1. 기본 설정 및 1시간 자동 갱신
+# 1. 기본 설정 및 보안 세션 함수
 # ==========================================
-st.set_page_config(page_title="주식 비서 Polygon", page_icon="🛡️", layout="wide")
-
-# 분당 5회 호출 제한을 고려하여 1시간 갱신 설정 (3,600,000ms)
-st_autorefresh(interval=60 * 60 * 1000, key="data_refresh")
+st.set_page_config(page_title="주식 비서 Polygon Pro", page_icon="🛡️", layout="wide")
+st_autorefresh(interval=60 * 60 * 1000, key="data_refresh") # 1시간 갱신
 
 POLYGON_KEY = st.secrets["polygon_key"]
 SHEET_NAME = "stock_db"
 
+def get_safe_session():
+    """야후 차단을 피하기 위한 브라우저 위장 세션"""
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+    })
+    return session
+
+@st.cache_data(ttl=3600)
+def fetch_safe_financials(symbol):
+    """안전한 방식으로 재무 정보 가져오기"""
+    try:
+        t = yf.Ticker(symbol, session=get_safe_session())
+        return t.info
+    except: return {}
+
 # ==========================================
-# 2. Polygon.io 데이터 엔진 (안정성 강화)
+# 2. Polygon 데이터 엔진
 # ==========================================
 @st.cache_data(ttl=3600)
 def fetch_history_polygon(symbol):
-    """Polygon.io를 통한 1년치 주가 데이터 수집"""
     end_date = datetime.now().strftime('%Y-%m-%d')
     start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
     url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}?adjusted=true&sort=asc&apiKey={POLYGON_KEY}"
-    
     try:
         r = requests.get(url)
         data = r.json()
@@ -51,21 +64,17 @@ def fetch_history_polygon(symbol):
             df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
             return df
         return pd.DataFrame()
-    except:
-        return pd.DataFrame()
+    except: return pd.DataFrame()
 
 @st.cache_data(ttl=600)
 def fetch_current_price_polygon(symbol):
-    """최근 종가(무료버전 기준) 가져오기"""
     url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/prev?adjusted=true&apiKey={POLYGON_KEY}"
     try:
         r = requests.get(url)
         data = r.json()
-        if "results" in data:
-            return float(data["results"][0]["c"])
+        if "results" in data: return float(data["results"][0]["c"])
         return 0.0
-    except:
-        return 0.0
+    except: return 0.0
 
 # ==========================================
 # 2. 유저 식별 시스템 (로그인/로그아웃)
@@ -77,15 +86,17 @@ def logout():
     st.session_state.user_id = ""
     st.cache_data.clear()
     st.rerun()
-
+    
 if not st.session_state.user_id:
-    st.title("🚀 주식 비서 접속")
-    user_input = st.text_input("사용자 이름을 입력하세요", placeholder="이름별로 데이터가 따로 저장됩니다.")
-    if st.button("접속하기", use_container_width=True):
-        if user_input.strip():
-            st.session_state.user_id = user_input.strip()
-            st.rerun()
+    st.title("🔐 주식 비서 접속")
+    u_input = st.text_input("이름을 입력하세요", placeholder="이름별로 데이터가 따로 저장됩니다.")
+    if st.button("접속"):
+        st.session_state.user_id = u_input.strip()
+        st.rerun()
     st.stop()
+
+my_portfolio, ticker_info = load_portfolio_gs()
+tickers = list(my_portfolio.keys())
 
 # ==========================================
 # 3. 데이터 핸들링
@@ -165,8 +176,9 @@ def open_manager():
                 new_i[t] = [str(r["Name"]), "-"]
         save_portfolio_gs(new_p, new_i)
         st.rerun()
+        
 # ==========================================
-# 3. 팝업창 (매뉴얼 및 관리)
+# 5. 팝업창 (매뉴얼 및 관리)
 # ==========================================
 @st.dialog("📖 주식 비서 사용 매뉴얼")
 def show_manual():
@@ -200,10 +212,8 @@ def show_manual():
     """)
     st.info("Polygon 무료 API 정책에 따라 주가는 전일 종가 기준으로 표시됩니다.")
 
-# (load_portfolio_gs, save_portfolio_gs 등 데이터 핸들링 로직은 이전과 동일)
-
 # ==========================================
-# 5. 메인 UI 및 듀얼 시계
+# 6. 메인 UI 및 듀얼 시계
 # ==========================================
 if "user_id" not in st.session_state:
     st.session_state.user_id = ""
@@ -216,13 +226,11 @@ if not st.session_state.user_id:
         st.rerun()
     st.stop()
 
-# 시간 설정
-now_kr = datetime.now()
-now_us = now_kr - timedelta(hours=14)
-
 c_t, c_b = st.columns([1.5, 1.2])
 with c_t:
     st.subheader(f"📈 {st.session_state.user_id}님의 인텔리전트 비서")
+    now_kr = datetime.now()
+    now_us = now_kr - timedelta(hours=14)
     st.caption(f"🇰🇷 {now_kr.strftime('%y/%m/%d %H:%M')} | 🇺🇸 {now_us.strftime('%H:%M')} (NY)")
 
 with c_b:
@@ -241,16 +249,16 @@ st.divider()
 # [Tab 1] 자산
 if menu == "📊 자산":
     total_ev, total_bv, data = 0, 0, []
-    with st.spinner("Polygon에서 자산 정보를 동기화 중..."):
+    with st.spinner("Polygon 자산 동기화 중..."):
         for t in tickers:
             curr_p = fetch_current_price_polygon(t)
-            qty, avg = my_portfolio[t]
-            ev = curr_p * qty; bv = avg * qty; profit = ev - bv
+            q, a = my_portfolio[t]
+            ev = curr_p * q; bv = a * q; profit = ev - bv
             pct = (profit / bv * 100) if bv > 0 else 0
             total_ev += ev; total_bv += bv
             data.append({"종목": f"{ticker_info[t][0]}({t})", "현재가": curr_p, "수익률": pct, "평가액": ev})
-            time.sleep(0.2) # 분당 호출 제한 방지
-
+            time.sleep(0.2)
+    
     t_profit = total_ev - total_bv
     t_pct = (t_profit / total_bv * 100) if total_bv > 0 else 0
     st.metric("총 자산 평가액", f"${total_ev:,.2f}", f"${t_profit:,.2f} ({t_pct:+.2f}%)")
@@ -259,14 +267,14 @@ if menu == "📊 자산":
 
 # [Tab 2] AI 예측 (GBR, SVR, 성공률, 투자 의견)
 elif menu == "🔮 AI예측":
-    st.warning("⚠️ AI 예측은 기술적 분석일 뿐이며, 재미로 참고해 주세요.")
+    st.warning("⚠️ 재미로만 참고해 주세요.")
     if tickers:
         c1, c2 = st.columns(2)
         sel = c1.selectbox("종목 선택", tickers)
         model_type = c2.selectbox("모델 선택", ["📈 Gradient Boosting", "🎯 SVR (비선형)", "📏 선형회귀"])
-
-        if st.button("🤖 AI 정밀 분석 실행", use_container_width=True):
-            with st.spinner("Polygon 데이터 분석 중..."):
+        
+        if st.button("🤖 AI 정밀 분석 실행"):
+            with st.spinner("분석 중..."):
                 df_h = fetch_history_polygon(sel)
                 if not df_h.empty and len(df_h) > 60:
                     # 백테스팅 (성공률 계산)
@@ -308,7 +316,8 @@ elif menu == "🔮 AI예측":
                     fdates = [df_h.index[-1] + timedelta(days=i) for i in range(1, 31)]
                     ax.plot(fdates, future_preds, 'r-', linewidth=2)
                     st.pyplot(fig)
-                else: st.error("데이터가 부족합니다.")
+                    st.success("분석 완료!")
+                else: st.error("데이터 부족")
 
 # [Tab 3] 종합분석 (개정본)
 elif menu == "📉 종합분석":
