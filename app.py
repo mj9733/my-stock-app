@@ -1,72 +1,71 @@
 import streamlit as st
-import requests
 import pandas as pd
-import yfinance as yf
 import numpy as np
+import requests
+import gspread
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-import matplotlib.font_manager as fm
-import gspread
-import os
 import feedparser
 import urllib.parse
+import time
 from datetime import datetime, timedelta
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.svm import SVR
 from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import PolynomialFeatures
+from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
-import sys
-import warnings
-warnings.filterwarnings('ignore')
 from streamlit_autorefresh import st_autorefresh
+import warnings
 
-# [추가] 브라우저처럼 위장하여 차단을 피하는 세션 함수
-def get_safe_session():
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
-    })
-    return session
+warnings.filterwarnings('ignore')
 
-# [추가] 재무 정보 호출 시 1시간 동안 결과를 기억하여 서버 부하 감소
-@st.cache_data(ttl=3600)
-def fetch_safe_financials(ticker_symbol):
-    try:
-        t = yf.Ticker(ticker_symbol, session=get_safe_session())
-        return t.info
-    except:
-        return {}
 # ==========================================
-# 1. 기본 설정 & CSS
+# 1. 기본 설정 및 1시간 자동 갱신
 # ==========================================
-st.set_page_config(page_title="내 주식 비서 Pro", page_icon="📱", layout="wide")
+st.set_page_config(page_title="주식 비서 Polygon", page_icon="🛡️", layout="wide")
 
-# 5분 자동 갱신
+# 분당 5회 호출 제한을 고려하여 1시간 갱신 설정 (3,600,000ms)
 st_autorefresh(interval=60 * 60 * 1000, key="data_refresh")
 
-st.markdown("""
-    <style>
-        .block-container { padding-top: 1rem !important; padding-bottom: 3rem !important; padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
-        div[data-testid="stDataFrame"] { font-size: 0.8rem; }
-        div.stButton > button { width: 100%; }
-    </style>
-""", unsafe_allow_html=True)
-
+POLYGON_KEY = st.secrets["polygon_key"]
 SHEET_NAME = "stock_db"
 
-def configure_fonts():
-    if sys.platform == 'linux':
-        font_path = '/usr/share/fonts/truetype/nanum/NanumGothic.ttf'
-        if os.path.isfile(font_path):
-            fm.fontManager.addfont(font_path)
-            plt.rc('font', family='NanumGothic')
-    elif sys.platform == 'darwin':
-        plt.rc('font', family='AppleGothic')
-    else:
-        plt.rc('font', family='Malgun Gothic')
-    plt.rcParams['axes.unicode_minus'] = False
+# ==========================================
+# 2. Polygon.io 데이터 엔진 (안정성 강화)
+# ==========================================
+@st.cache_data(ttl=3600)
+def fetch_history_polygon(symbol):
+    """Polygon.io를 통한 1년치 주가 데이터 수집"""
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/{start_date}/{end_date}?adjusted=true&sort=asc&apiKey={POLYGON_KEY}"
+    
+    try:
+        r = requests.get(url)
+        data = r.json()
+        if "results" in data:
+            df = pd.DataFrame(data["results"])
+            df['Date'] = pd.to_datetime(df['t'], unit='ms')
+            df.set_index('Date', inplace=True)
+            df = df[['o', 'h', 'l', 'c', 'v']]
+            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            return df
+        return pd.DataFrame()
+    except:
+        return pd.DataFrame()
 
-configure_fonts()
+@st.cache_data(ttl=600)
+def fetch_current_price_polygon(symbol):
+    """최근 종가(무료버전 기준) 가져오기"""
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/prev?adjusted=true&apiKey={POLYGON_KEY}"
+    try:
+        r = requests.get(url)
+        data = r.json()
+        if "results" in data:
+            return float(data["results"][0]["c"])
+        return 0.0
+    except:
+        return 0.0
 
 # ==========================================
 # 2. 유저 식별 시스템 (로그인/로그아웃)
@@ -193,174 +192,123 @@ def show_manual():
     st.latex(r"RSI = 100 - \frac{100}{1 + \frac{\text{Average Gain}}{\text{Average Loss}}}")
     st.caption("※ RSI가 30 이하이면 '과매도(매수 기회)', 70 이상이면 '과매수(주의)'로 해석합니다.")
 
+    st.write("### 🤖 고성능 AI 모델 설명")
+    st.markdown("""
+    * **Gradient Boosting:** 여러 트리를 결합해 오차를 줄이는 최신 모델 (추천)
+    * **SVR:** 주가의 비선형적 파동을 분석하는 데 탁월함
+    * **성공률:** 과거 30일 전 데이터로 현재가를 얼마나 맞췄는지 나타내는 지표
+    """)
+    st.info("Polygon 무료 API 정책에 따라 주가는 전일 종가 기준으로 표시됩니다.")
+
 # (load_portfolio_gs, save_portfolio_gs 등 데이터 핸들링 로직은 이전과 동일)
 
 # ==========================================
-# 5. 메인 UI (상단 버튼 배치 수정)
+# 5. 메인 UI 및 듀얼 시계
 # ==========================================
-now_kr = datetime.now()
-now_us = now_kr - timedelta(hours=14) # 서머타임 미적용 기준 14시간 차이
+if "user_id" not in st.session_state:
+    st.session_state.user_id = ""
 
-col_title, col_user_btns = st.columns([1.5, 1])
-with col_title:
-    st.subheader(f"📈 {st.session_state.user_id}님의 주식 비서")
-    # 한국 및 미국 시간 표시 복구
+if not st.session_state.user_id:
+    st.title("🔐 주식 비서 Polygon 접속")
+    u_input = st.text_input("이름을 입력하세요")
+    if st.button("접속"):
+        st.session_state.user_id = u_input.strip()
+        st.rerun()
+    st.stop()
+
+# 시간 설정
+now_kr = datetime.now()
+now_us = now_kr - timedelta(hours=14)
+
+c_t, c_b = st.columns([1.5, 1.2])
+with c_t:
+    st.subheader(f"📈 {st.session_state.user_id}님의 인텔리전트 비서")
     st.caption(f"🇰🇷 {now_kr.strftime('%y/%m/%d %H:%M')} | 🇺🇸 {now_us.strftime('%H:%M')} (NY)")
 
-with col_user_btns:
-    # 3개의 버튼을 가로로 나란히 배치
-    btn_col1, btn_col2, btn_col3 = st.columns(3)
-    with btn_col1:
-        if st.button("📖 매뉴얼", use_container_width=True): show_manual()
-    with btn_col2:
-        if st.button("⚙️ 관리", use_container_width=True): open_stock_manager() # 이전 다이얼로그 함수
-    with btn_col3:
-        if st.button("👤 로그아웃", use_container_width=True): logout()
-            
+with c_b:
+    b1, b2, b3 = st.columns(3)
+    if b1.button("📖 매뉴얼"): show_manual()
+    if b2.button("⚙️ 관리"): open_stock_manager()
+    if b3.button("👤 로그아웃"): logout()
+
 menu = st.radio("메뉴", ["📊 자산", "🔮 AI예측", "📉 종합분석", "📡 스캔", "📰 뉴스"], horizontal=True, label_visibility="collapsed")
 st.divider()
 
-# [Tab 1] 자산 (수익률 표시 복구 버전)
+# ==========================================
+# 6. 탭별 상세 로직
+# ==========================================
+
+# [Tab 1] 자산
 if menu == "📊 자산":
     total_ev, total_bv, data = 0, 0, []
-    
-    for t in tickers:
-        q, a = my_portfolio[t]
-        c = current_prices.get(t, 0)
-        
-        ev = c * q  # 현재 평가액
-        bv = a * q  # 총 매수 금액
-        profit = ev - bv
-        pct = (profit / bv * 100) if bv > 0 else 0
-        
-        total_ev += ev
-        total_bv += bv
-        
-        data.append({
-            "종목": f"{ticker_info[t][0]}({t})",
-            "현재가": c,
-            "수익률": pct,
-            "평가액": ev
-        })
+    with st.spinner("Polygon에서 자산 정보를 동기화 중..."):
+        for t in tickers:
+            curr_p = fetch_current_price_polygon(t)
+            qty, avg = my_portfolio[t]
+            ev = curr_p * qty; bv = avg * qty; profit = ev - bv
+            pct = (profit / bv * 100) if bv > 0 else 0
+            total_ev += ev; total_bv += bv
+            data.append({"종목": f"{ticker_info[t][0]}({t})", "현재가": curr_p, "수익률": pct, "평가액": ev})
+            time.sleep(0.2) # 분당 호출 제한 방지
 
-    # 총 수익금 및 수익률 계산
-    total_profit = total_ev - total_bv
-    total_pct = (total_profit / total_bv * 100) if total_bv > 0 else 0
-    
-    # 델타(수정치)를 포함한 메트릭 표시
-    st.metric(
-        label="총 자산 평가액", 
-        value=f"${total_ev:,.2f}", 
-        delta=f"${total_profit:,.2f} ({total_pct:+.2f}%)"
-    )
-    
+    t_profit = total_ev - total_bv
+    t_pct = (t_profit / total_bv * 100) if total_bv > 0 else 0
+    st.metric("총 자산 평가액", f"${total_ev:,.2f}", f"${t_profit:,.2f} ({t_pct:+.2f}%)")
     if data:
-        df = pd.DataFrame(data).sort_values("평가액", ascending=False)
-        st.dataframe(
-            df.style.format({
-                '현재가': '${:,.2f}', 
-                '수익률': '{:+.2f}%', 
-                '평가액': '${:,.2f}'
-            }), 
-            hide_index=True, 
-            use_container_width=True
-        )
+        st.dataframe(pd.DataFrame(data).sort_values("평가액", ascending=False), hide_index=True, use_container_width=True)
 
-# [Tab 2] AI 예측 (GBR & SVR 추가 및 Alpha Vantage 연동 버전)
+# [Tab 2] AI 예측 (GBR, SVR, 성공률, 투자 의견)
 elif menu == "🔮 AI예측":
-    st.warning("⚠️ **AI 예측은 과거 데이터를 기반으로 한 기술적 분석이며, 실제 투자 결과는 시장 상황에 따라 다를 수 있습니다. 재미와 참고용으로만 활용해 주세요.**")
-    
-    if not tickers:
-        st.info("종목이 없습니다. 관리 메뉴에서 종목을 먼저 추가해 주세요.")
-    else:
-        c_sel, c_opt = st.columns([1.5, 1.5])
-        with c_sel:
-            sel_txt = st.selectbox("예측할 종목 선택", [f"{ticker_info[t][0]} ({t})" for t in tickers], label_visibility="collapsed")
-            sel = sel_txt.split('(')[-1].replace(')', '')
-        with c_opt:
-            # 더 정교한 분석을 위한 모델 라인업 확장
-            model_type = st.selectbox("분석 모델 선택", 
-                ["📏 선형회귀", "🌲 랜덤포레스트", "📈 Gradient Boosting (추천)", "🎯 SVR (비선형 분석)"], 
-                label_visibility="collapsed")
+    st.warning("⚠️ AI 예측은 기술적 분석일 뿐이며, 재미로 참고해 주세요.")
+    if tickers:
+        c1, c2 = st.columns(2)
+        sel = c1.selectbox("종목 선택", tickers)
+        model_type = c2.selectbox("모델 선택", ["📈 Gradient Boosting", "🎯 SVR (비선형)", "📏 선형회귀"])
 
-        if st.button("🤖 고성능 AI 미래 가격 예측 실행", use_container_width=True):
-            with st.spinner(f"{model_type} 모델 학습 및 분석 중..."):
-                try:
-                    # 1. Alpha Vantage를 통한 데이터 수집 (안전 버전)
-                    # 이전 단계에서 만든 fetch_history_av 함수를 사용한다고 가정합니다.
-                    df_h = fetch_history_av(sel) 
+        if st.button("🤖 AI 정밀 분석 실행", use_container_width=True):
+            with st.spinner("Polygon 데이터 분석 중..."):
+                df_h = fetch_history_polygon(sel)
+                if not df_h.empty and len(df_h) > 60:
+                    # 백테스팅 (성공률 계산)
+                    train_df = df_h.iloc[:-30]
+                    actual_30 = df_h.iloc[-30:]['Close'].values
                     
-                    if df_h.empty:
-                        # Alpha Vantage 실패 시 야후 세션 방식으로 백업
-                        df_h = yf.download(sel, period="1y", session=get_safe_session(), progress=False)
-                        df_h = df_h[['Close']].dropna()
+                    def get_pred(data, days):
+                        X = np.arange(len(data)).reshape(-1, 1)
+                        y = data['Close'].values
+                        if "Gradient" in model_type:
+                            m = GradientBoostingRegressor(n_estimators=100).fit(X, y)
+                        elif "SVR" in model_type:
+                            m = make_pipeline(StandardScaler(), SVR(kernel='rbf', C=1e3)).fit(X, y)
+                        else:
+                            m = LinearRegression().fit(X, y)
+                        return m.predict(np.arange(len(data), len(data)+days).reshape(-1, 1))
 
-                    if df_h.empty: raise Exception("데이터를 불러올 수 없습니다.")
-
-                    # 2. 데이터 전처리
-                    X = np.arange(len(df_h)).reshape(-1, 1)
-                    y = df_h['Close'].values.ravel()
+                    back_preds = get_pred(train_df, 30)
+                    acc = 100 - (np.mean(np.abs((actual_30 - back_preds) / actual_30)) * 100)
                     
-                    # SVR과 Gradient Boosting을 위한 스케일링 준비
-                    from sklearn.preprocessing import StandardScaler
-                    scaler_X = StandardScaler().fit(X)
-                    scaler_y = StandardScaler().fit(y.reshape(-1, 1))
-                    
-                    X_scaled = scaler_X.transform(X)
-                    y_scaled = scaler_y.transform(y.reshape(-1, 1)).ravel()
-
-                    # 3. 모델 선택 및 학습
-                    if "선형" in model_type:
-                        model = LinearRegression()
-                        model.fit(X, y)
-                    elif "랜덤" in model_type:
-                        model = RandomForestRegressor(n_estimators=100, random_state=42)
-                        model.fit(X, y)
-                    elif "Gradient" in model_type:
-                        # 오차를 순차적으로 보정하여 추세 파악에 탁월함
-                        model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)
-                        model.fit(X, y)
-                    elif "SVR" in model_type:
-                        # 비선형적인 주가 흐름을 파악하는 데 강력함
-                        model = SVR(kernel='rbf', C=1e3, gamma=0.1)
-                        model.fit(X_scaled, y_scaled)
-
-                    # 4. 미래 30일 예측
-                    future_days = 30
-                    future_X = np.arange(len(df_h), len(df_h) + future_days).reshape(-1, 1)
-                    
-                    if "SVR" in model_type:
-                        future_X_scaled = scaler_X.transform(future_X)
-                        pred_y_scaled = model.predict(future_X_scaled)
-                        pred_y = scaler_y.inverse_transform(pred_y_scaled.reshape(-1, 1)).ravel()
-                        trend_line_scaled = model.predict(X_scaled)
-                        trend_line = scaler_y.inverse_transform(trend_line_scaled.reshape(-1, 1)).ravel()
-                    else:
-                        pred_y = model.predict(future_X)
-                        trend_line = model.predict(X)
-
-                    # 5. 결과 시각화
-                    curr_p = y[-1]
-                    pred_f = pred_y[-1]
+                    # 미래 예측
+                    future_preds = get_pred(df_h, 30)
+                    curr_p = df_h['Close'].iloc[-1]; pred_f = future_preds[-1]
                     pct = (pred_f - curr_p) / curr_p * 100
-                    
-                    st.metric(f"30일 뒤 예상 ({model_type})", f"${pred_f:.2f}", f"{pct:+.2f}%")
-                    
+
+                    # 결과 및 의견 표시
+                    res1, res2 = st.columns(2)
+                    res1.metric("30일 뒤 예상", f"${pred_f:.2f}", f"{pct:+.2f}%")
+                    res2.metric("모델 성공률", f"{acc:.1f}%")
+
+                    st.divider()
+                    if pct > 5 and acc > 85: st.success(f"🟢 **매수 권장**: 높은 신뢰도로 {pct:.1f}% 상승이 예상됩니다.")
+                    elif pct < -5: st.error(f"🔴 **주의**: AI가 하락 흐름을 감지했습니다.")
+                    else: st.info("⚪ **관망**: 뚜렷한 추세가 보이지 않습니다.")
+
+                    # 차트
                     fig, ax = plt.subplots(figsize=(6, 3))
-                    ax.plot(df_h.index, y, label='실제 주가', color='gray', alpha=0.5)
-                    ax.plot(df_h.index, trend_line, '--', label='AI 분석 추세', color='orange', alpha=0.7)
-                    
-                    last_dt = df_h.index[-1]
-                    fdates = [last_dt + timedelta(days=i) for i in range(1, future_days + 1)]
-                    ax.plot(fdates, pred_y, 'r-', linewidth=2, label='미래 예측')
-                    
-                    ax.xaxis.set_major_formatter(mdates.DateFormatter("'%y.%m"))
-                    ax.legend()
-                    ax.grid(True, alpha=0.3, linestyle='--')
+                    ax.plot(df_h.index, df_h['Close'], color='gray', alpha=0.5)
+                    fdates = [df_h.index[-1] + timedelta(days=i) for i in range(1, 31)]
+                    ax.plot(fdates, future_preds, 'r-', linewidth=2)
                     st.pyplot(fig)
-                    
-                except Exception as e:
-                    st.error(f"예측 도중 오류가 발생했습니다: {e}")
+                else: st.error("데이터가 부족합니다.")
 
 # [Tab 3] 종합분석 (개정본)
 elif menu == "📉 종합분석":
@@ -417,47 +365,22 @@ elif menu == "📉 종합분석":
                     except:
                         st.caption("실적 차트를 불러올 수 없습니다.")
 
-# [Tab 4] 스캔 (개정본)
+# [Tab 4] 스캔 (안전한 스캔)
 elif menu == "📡 스캔":
-    if st.button("🚀 전체 종목 기술적 지표 스캔", use_container_width=True):
-        if not tickers:
-            st.warning("종목이 없습니다.")
-        else:
-            with st.spinner("RSI 및 변동률 분석 중..."):
-                try:
-                    # 세션을 사용하여 차단 방지
-                    df_all = yf.download(tickers, period="2mo", session=get_safe_session(), progress=False)
-                    res = []
-                    
-                    for t in tickers:
-                        # 종목별 데이터 추출
-                        ticker_data = df_all[t] if len(tickers) > 1 else df_all
-                        c = ticker_data['Close'].dropna()
-                        
-                        # [핵심] 데이터가 부족하거나 없으면 건너뛰어 에러 방지
-                        if c.empty or len(c) < 15: 
-                            continue
-                        
-                        # 지표 계산
-                        p_now = c.iloc[-1]
-                        p_prev = c.iloc[-2]
-                        pct = (p_now - p_prev) / p_prev * 100
-                        
-                        # RSI 계산
-                        diff = c.diff()
-                        up = diff.clip(lower=0).rolling(14).mean()
-                        down = -diff.clip(upper=0).rolling(14).mean()
-                        rsi = 100 - (100 / (1 + (up / down).iloc[-1]))
-                        
-                        sig = "🔥급등" if pct >= 3 else ("💎과매도" if rsi <= 30 else "")
-                        res.append([t, f"{pct:+.2f}%", f"{rsi:.1f}", sig])
-                    
-                    if res:
-                        st.dataframe(pd.DataFrame(res, columns=["티커", "등락", "RSI", "신호"]), use_container_width=True)
-                    else:
-                        st.info("현재 분석 가능한 데이터가 부족합니다.")
-                except Exception as e:
-                    st.error("데이터를 불러오는 중 문제가 발생했습니다. 관리자 설정을 확인하세요.")
+    if st.button("🚀 Polygon 스캔 실행"):
+        res = []
+        with st.spinner("종목별 지표 계산 중 (분당 호출 제한 준수)..."):
+            for t in tickers:
+                df = fetch_history_polygon(t)
+                if not df.empty and len(df) > 20:
+                    c = df['Close']
+                    pct = (c.iloc[-1] - c.iloc[-2]) / c.iloc[-2] * 100
+                    diff = c.diff(); up = diff.clip(lower=0).rolling(14).mean(); down = -diff.clip(upper=0).rolling(14).mean()
+                    rsi = 100 - (100 / (1 + (up / down).iloc[-1]))
+                    sig = "🔥급등" if pct >= 3 else ("💎과매도" if rsi <= 30 else "")
+                    res.append([t, f"{pct:+.2f}%", f"{rsi:.1f}", sig])
+                time.sleep(1.2) # Polygon 무료플랜 분당 5회 제한 준수 핵심
+            st.table(pd.DataFrame(res, columns=["티커", "등락", "RSI", "신호"]))
 
 # [Tab 5] 뉴스 분석 (에러 방지 및 감성 분석 강화 버전)
 elif menu == "📰 뉴스":
