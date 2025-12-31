@@ -319,7 +319,7 @@ elif menu == "🔮 AI예측":
                     st.success("분석 완료!")
                 else: st.error("데이터 부족")
 
-# [Tab 3] 종합분석 (개정본)
+# [Tab 3] 종합분석 (최적화 및 에러 방지 버전)
 elif menu == "📉 종합분석":
     if not tickers:
         st.warning("분석할 종목이 없습니다.")
@@ -328,51 +328,57 @@ elif menu == "📉 종합분석":
         sel_ticker = sel_txt.split('(')[-1].replace(')', '')
         
         if st.button("🔍 상세 재무 진단 실행", use_container_width=True):
-            with st.spinner("야후 서버에서 재무 데이터를 가져오는 중..."):
+            with st.spinner("야후 서버에서 재무 데이터를 분석 중..."):
+                # 1. 안전하게 데이터 가져오기
                 info = fetch_safe_financials(sel_ticker)
                 
                 if not info:
-                    st.error("현재 야후 서버 접속이 일시적으로 제한되었습니다. 잠시 후 다시 시도해 주세요.")
+                    st.error("현재 야후 서버 접속이 제한되었습니다. 잠시 후 다시 시도하거나 앱을 Reboot 해주세요.")
                 else:
-                    per = info.get('trailingPE', 0)
-                    pbr = info.get('priceToBook', 0)
-                    roe = info.get('returnOnEquity', 0)
+                    # 2. 변수 정의 (에러 방지의 핵심)
+                    per = info.get('trailingPE')
+                    pbr = info.get('priceToBook')
+                    roe = info.get('returnOnEquity')
+                    # biz_summary 변수를 여기서 명확히 정의해야 에러가 안 납니다.
+                    biz_summary = info.get('longBusinessSummary', '설명이 없습니다.') 
                     
+                    # 3. 주요 지표 표시 (한 번만 깔끔하게)
+                    st.write(f"### 📊 {sel_ticker} 핵심 재무 지표")
                     c1, c2, c3 = st.columns(3)
-                    c1.metric("PER", f"{per:.2f}" if per else "정보 없음")
-                    c2.metric("PBR", f"{pbr:.2f}" if pbr else "정보 없음")
-                    c3.metric("ROE", f"{roe*100:.2f}%" if roe else "정보 없음")
-                    st.write(f"**기업 요약:** {info.get('longBusinessSummary', '설명이 없습니다.')[:500]}...")
-
-                    # 1. 주요 지표 표시 (Metric)
-                    c1, c2, c3 = st.columns(3)
+                    
+                    # 수치가 있을 때만 소수점 표시, 없으면 N/A
                     c1.metric("PER (주가수익비율)", f"{per:.2f}" if per else "N/A")
                     c2.metric("PBR (주가순자산비율)", f"{pbr:.2f}" if pbr else "N/A")
                     c3.metric("ROE (자기자본이익률)", f"{roe*100:.2f}%" if roe else "N/A")
-                    
-                    # 2. 투자 의견 자동 생성
+
+                    # 4. AI 투자 의견 생성
                     st.divider()
                     score = 0
                     if per and 0 < per < 20: score += 1
                     if pbr and 0 < pbr < 1.5: score += 1
                     if roe and roe > 0.15: score += 1
                     
-                    status = "🟢 양호" if score >= 2 else ("🟡 보통" if score == 1 else "🔴 관망")
-                    st.subheader(f"AI 종합 진단 결과: {status}")
+                    status = "🟢 투자 양호" if score >= 2 else ("🟡 보통" if score == 1 else "🔴 관망 권유")
+                    st.subheader(f"🤖 AI 종합 진단 결과: {status}")
                     
-                    # 3. 기업 개요 (접이식으로 깔끔하게)
-                    with st.expander("🏢 기업 개요 보기"):
+                    # 5. 기업 개요 (접이식)
+                    with st.expander("🏢 기업 상세 개요 보기"):
                         st.write(biz_summary)
 
-                    # 4. 분기 실적 차트
+                    # 6. 실적 차트 시각화
                     try:
+                        # yfinance의 세션을 사용하여 안전하게 호출
                         ticker_obj = yf.Ticker(sel_ticker, session=get_safe_session())
                         fin = ticker_obj.quarterly_financials
-                        if not fin.empty:
-                            st.write("### 📊 최근 분기 실적 추이")
-                            st.bar_chart(fin.loc['Total Revenue'])
-                    except:
-                        st.caption("실적 차트를 불러올 수 없습니다.")
+                        if not fin.empty and 'Total Revenue' in fin.index:
+                            st.write("### 📈 최근 분기 매출 추이")
+                            # 데이터를 보기 좋게 전치(T)하여 막대 그래프 생성
+                            rev_data = fin.loc['Total Revenue'].sort_index()
+                            st.bar_chart(rev_data)
+                        else:
+                            st.caption("공시된 분기 실적 데이터가 없습니다.")
+                    except Exception:
+                        st.caption("서버 응답 지연으로 실적 차트를 불러올 수 없습니다.")
 
 # [Tab 4] 스캔 (안전한 스캔)
 elif menu == "📡 스캔":
