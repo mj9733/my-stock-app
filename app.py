@@ -266,55 +266,89 @@ if menu == "📊 자산":
             use_container_width=True
         )
 
-# [Tab 2] AI 예측
+# [Tab 2] AI 예측 (GBR & SVR 추가 및 Alpha Vantage 연동 버전)
 elif menu == "🔮 AI예측":
-    # 상단 유의사항 문구 추가
     st.warning("⚠️ **AI 예측은 과거 데이터를 기반으로 한 기술적 분석이며, 실제 투자 결과는 시장 상황에 따라 다를 수 있습니다. 재미와 참고용으로만 활용해 주세요.**")
     
     if not tickers:
         st.info("종목이 없습니다. 관리 메뉴에서 종목을 먼저 추가해 주세요.")
     else:
-        # 기존 AI 예측 로직 시작
-        c_sel, c_opt = st.columns([2, 1])
+        c_sel, c_opt = st.columns([1.5, 1.5])
         with c_sel:
             sel_txt = st.selectbox("예측할 종목 선택", [f"{ticker_info[t][0]} ({t})" for t in tickers], label_visibility="collapsed")
             sel = sel_txt.split('(')[-1].replace(')', '')
         with c_opt:
-            model_type = st.selectbox("분석 모델", ["📏 선형회귀", "🌲 랜덤포레스트"], label_visibility="collapsed")
+            # 더 정교한 분석을 위한 모델 라인업 확장
+            model_type = st.selectbox("분석 모델 선택", 
+                ["📏 선형회귀", "🌲 랜덤포레스트", "📈 Gradient Boosting (추천)", "🎯 SVR (비선형 분석)"], 
+                label_visibility="collapsed")
 
-        if st.button("🤖 AI 미래 가격 예측 실행", use_container_width=True):
-            with st.spinner(f"{model_type}로 분석 중..."):
+        if st.button("🤖 고성능 AI 미래 가격 예측 실행", use_container_width=True):
+            with st.spinner(f"{model_type} 모델 학습 및 분석 중..."):
                 try:
-                    # 1년치 데이터 수집
-                    df_h = yf.download(sel, period="1y", progress=False)
-                    if df_h.empty: raise Exception("데이터 부족")
-                    df_h = df_h[['Close']].dropna()
+                    # 1. Alpha Vantage를 통한 데이터 수집 (안전 버전)
+                    # 이전 단계에서 만든 fetch_history_av 함수를 사용한다고 가정합니다.
+                    df_h = fetch_history_av(sel) 
                     
+                    if df_h.empty:
+                        # Alpha Vantage 실패 시 야후 세션 방식으로 백업
+                        df_h = yf.download(sel, period="1y", session=get_safe_session(), progress=False)
+                        df_h = df_h[['Close']].dropna()
+
+                    if df_h.empty: raise Exception("데이터를 불러올 수 없습니다.")
+
+                    # 2. 데이터 전처리
                     X = np.arange(len(df_h)).reshape(-1, 1)
                     y = df_h['Close'].values.ravel()
                     
-                    # 모델 학습
+                    # SVR과 Gradient Boosting을 위한 스케일링 준비
+                    from sklearn.preprocessing import StandardScaler
+                    scaler_X = StandardScaler().fit(X)
+                    scaler_y = StandardScaler().fit(y.reshape(-1, 1))
+                    
+                    X_scaled = scaler_X.transform(X)
+                    y_scaled = scaler_y.transform(y.reshape(-1, 1)).ravel()
+
+                    # 3. 모델 선택 및 학습
                     if "선형" in model_type:
                         model = LinearRegression()
-                    else:
-                        model = RandomForestRegressor(n_estimators=50, random_state=42)
-                    
-                    model.fit(X, y)
-                    
-                    # 미래 30일 예측
-                    curr_p = df_h['Close'].iloc[-1].item()
+                        model.fit(X, y)
+                    elif "랜덤" in model_type:
+                        model = RandomForestRegressor(n_estimators=100, random_state=42)
+                        model.fit(X, y)
+                    elif "Gradient" in model_type:
+                        # 오차를 순차적으로 보정하여 추세 파악에 탁월함
+                        model = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)
+                        model.fit(X, y)
+                    elif "SVR" in model_type:
+                        # 비선형적인 주가 흐름을 파악하는 데 강력함
+                        model = SVR(kernel='rbf', C=1e3, gamma=0.1)
+                        model.fit(X_scaled, y_scaled)
+
+                    # 4. 미래 30일 예측
                     future_days = 30
                     future_X = np.arange(len(df_h), len(df_h) + future_days).reshape(-1, 1)
-                    pred_y = model.predict(future_X)
+                    
+                    if "SVR" in model_type:
+                        future_X_scaled = scaler_X.transform(future_X)
+                        pred_y_scaled = model.predict(future_X_scaled)
+                        pred_y = scaler_y.inverse_transform(pred_y_scaled.reshape(-1, 1)).ravel()
+                        trend_line_scaled = model.predict(X_scaled)
+                        trend_line = scaler_y.inverse_transform(trend_line_scaled.reshape(-1, 1)).ravel()
+                    else:
+                        pred_y = model.predict(future_X)
+                        trend_line = model.predict(X)
+
+                    # 5. 결과 시각화
+                    curr_p = y[-1]
                     pred_f = pred_y[-1]
                     pct = (pred_f - curr_p) / curr_p * 100
                     
-                    # 결과 표시
-                    st.metric("30일 뒤 예상 가격", f"${pred_f:.2f}", f"{pct:+.2f}%")
+                    st.metric(f"30일 뒤 예상 ({model_type})", f"${pred_f:.2f}", f"{pct:+.2f}%")
                     
-                    # 시각화 차트
                     fig, ax = plt.subplots(figsize=(6, 3))
-                    ax.plot(df_h.index, df_h['Close'], label='실제 주가', color='gray', alpha=0.5)
+                    ax.plot(df_h.index, y, label='실제 주가', color='gray', alpha=0.5)
+                    ax.plot(df_h.index, trend_line, '--', label='AI 분석 추세', color='orange', alpha=0.7)
                     
                     last_dt = df_h.index[-1]
                     fdates = [last_dt + timedelta(days=i) for i in range(1, future_days + 1)]
@@ -326,7 +360,7 @@ elif menu == "🔮 AI예측":
                     st.pyplot(fig)
                     
                 except Exception as e:
-                    st.error(f"예측 중 오류가 발생했습니다: {e}")
+                    st.error(f"예측 도중 오류가 발생했습니다: {e}")
 
 # [Tab 3] 종합분석 (개정본)
 elif menu == "📉 종합분석":
