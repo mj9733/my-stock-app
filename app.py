@@ -177,16 +177,65 @@ if menu == "📊 자산":
 
 # [Tab 2] AI 예측
 elif menu == "🔮 AI예측":
-    if tickers:
-        sel = st.selectbox("종목 선택", tickers)
-        if st.button("🤖 예측 실행"):
-            df_h = yf.download(sel, period="1y", progress=False)
-            y = df_h['Close'].values.ravel()
-            X = np.arange(len(y)).reshape(-1, 1)
-            model = LinearRegression().fit(X, y)
-            pred = model.predict(np.arange(len(y), len(y)+30).reshape(-1, 1))
-            st.metric("30일 뒤 예상", f"${pred[-1]:.2f}")
-            st.line_chart(np.append(y, pred))
+    # 상단 유의사항 문구 추가
+    st.warning("⚠️ **AI 예측은 과거 데이터를 기반으로 한 기술적 분석이며, 실제 투자 결과는 시장 상황에 따라 다를 수 있습니다. 재미와 참고용으로만 활용해 주세요.**")
+    
+    if not tickers:
+        st.info("종목이 없습니다. 관리 메뉴에서 종목을 먼저 추가해 주세요.")
+    else:
+        # 기존 AI 예측 로직 시작
+        c_sel, c_opt = st.columns([2, 1])
+        with c_sel:
+            sel_txt = st.selectbox("예측할 종목 선택", [f"{ticker_info[t][0]} ({t})" for t in tickers], label_visibility="collapsed")
+            sel = sel_txt.split('(')[-1].replace(')', '')
+        with c_opt:
+            model_type = st.selectbox("분석 모델", ["📏 선형회귀", "🌲 랜덤포레스트"], label_visibility="collapsed")
+
+        if st.button("🤖 AI 미래 가격 예측 실행", use_container_width=True):
+            with st.spinner(f"{model_type}로 분석 중..."):
+                try:
+                    # 1년치 데이터 수집
+                    df_h = yf.download(sel, period="1y", progress=False)
+                    if df_h.empty: raise Exception("데이터 부족")
+                    df_h = df_h[['Close']].dropna()
+                    
+                    X = np.arange(len(df_h)).reshape(-1, 1)
+                    y = df_h['Close'].values.ravel()
+                    
+                    # 모델 학습
+                    if "선형" in model_type:
+                        model = LinearRegression()
+                    else:
+                        model = RandomForestRegressor(n_estimators=50, random_state=42)
+                    
+                    model.fit(X, y)
+                    
+                    # 미래 30일 예측
+                    curr_p = df_h['Close'].iloc[-1].item()
+                    future_days = 30
+                    future_X = np.arange(len(df_h), len(df_h) + future_days).reshape(-1, 1)
+                    pred_y = model.predict(future_X)
+                    pred_f = pred_y[-1]
+                    pct = (pred_f - curr_p) / curr_p * 100
+                    
+                    # 결과 표시
+                    st.metric("30일 뒤 예상 가격", f"${pred_f:.2f}", f"{pct:+.2f}%")
+                    
+                    # 시각화 차트
+                    fig, ax = plt.subplots(figsize=(6, 3))
+                    ax.plot(df_h.index, df_h['Close'], label='실제 주가', color='gray', alpha=0.5)
+                    
+                    last_dt = df_h.index[-1]
+                    fdates = [last_dt + timedelta(days=i) for i in range(1, future_days + 1)]
+                    ax.plot(fdates, pred_y, 'r-', linewidth=2, label='미래 예측')
+                    
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter("'%y.%m"))
+                    ax.legend()
+                    ax.grid(True, alpha=0.3, linestyle='--')
+                    st.pyplot(fig)
+                    
+                except Exception as e:
+                    st.error(f"예측 중 오류가 발생했습니다: {e}")
 
 # [Tab 3] 종합분석 (생략되었던 부분 복구)
 elif menu == "📉 종합분석":
