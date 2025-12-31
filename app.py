@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import requests
 import gspread
-import yfinance as yf  # 누락되었던 임포트 추가
+import yfinance as yf
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import feedparser
@@ -110,13 +110,14 @@ def get_google_sheet():
         return sh.sheet1
     except: return None
 
-def load_portfolio_gs():
+ef load_portfolio_gs():
     sheet = get_google_sheet()
     if not sheet: return {}, {}
     try:
         data = sheet.get_all_records()
         my_p, t_i = {}, {}
         for row in data:
+            # st.session_state.user_id를 여기서 사용하므로, 호출 시점에 로그인이 되어있어야 함
             if str(row.get('User')).strip() == st.session_state.user_id:
                 t = str(row.get('Ticker')).strip().upper()
                 if t:
@@ -124,7 +125,7 @@ def load_portfolio_gs():
                     t_i[t] = [str(row.get('Name', t)), "-"]
         return my_p, t_i
     except: return {}, {}
-
+        
 def save_portfolio_gs(new_p, new_i):
     sheet = get_google_sheet()
     if not sheet: return
