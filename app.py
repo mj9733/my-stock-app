@@ -198,10 +198,14 @@ def show_manual():
 # ==========================================
 # 5. 메인 UI (상단 버튼 배치 수정)
 # ==========================================
-col_title, col_user_btns = st.columns([1.2, 1.3]) # 버튼 영역 확보를 위해 비율 조정
+now_kr = datetime.now()
+now_us = now_kr - timedelta(hours=14) # 서머타임 미적용 기준 14시간 차이
+
+col_title, col_user_btns = st.columns([1.5, 1])
 with col_title:
     st.subheader(f"📈 {st.session_state.user_id}님의 주식 비서")
-    st.caption(f"🇰🇷 {datetime.now().strftime('%y/%m/%d %H:%M')} 기준")
+    # 한국 및 미국 시간 표시 복구
+    st.caption(f"🇰🇷 {now_kr.strftime('%y/%m/%d %H:%M')} | 🇺🇸 {now_us.strftime('%H:%M')} (NY)")
 
 with col_user_btns:
     # 3개의 버튼을 가로로 나란히 배치
@@ -216,17 +220,51 @@ with col_user_btns:
 menu = st.radio("메뉴", ["📊 자산", "🔮 AI예측", "📉 종합분석", "📡 스캔", "📰 뉴스"], horizontal=True, label_visibility="collapsed")
 st.divider()
 
-# [Tab 1] 자산
+# [Tab 1] 자산 (수익률 표시 복구 버전)
 if menu == "📊 자산":
-    # (자산 로직 생략 없이 - 이전과 동일하게 작동)
-    total_ev, data = 0, []
+    total_ev, total_bv, data = 0, 0, []
+    
     for t in tickers:
-        q, a = my_portfolio[t]; c = current_prices.get(t, 0)
-        ev = c * q; bv = a * q; pct = ((ev - bv) / bv * 100) if bv > 0 else 0
+        q, a = my_portfolio[t]
+        c = current_prices.get(t, 0)
+        
+        ev = c * q  # 현재 평가액
+        bv = a * q  # 총 매수 금액
+        profit = ev - bv
+        pct = (profit / bv * 100) if bv > 0 else 0
+        
         total_ev += ev
-        data.append({"종목": f"{ticker_info[t][0]}({t})", "현재가": c, "수익률": pct, "평가액": ev})
-    st.metric("총 평가액", f"${total_ev:,.2f}")
-    if data: st.dataframe(pd.DataFrame(data), hide_index=True, use_container_width=True)
+        total_bv += bv
+        
+        data.append({
+            "종목": f"{ticker_info[t][0]}({t})",
+            "현재가": c,
+            "수익률": pct,
+            "평가액": ev
+        })
+
+    # 총 수익금 및 수익률 계산
+    total_profit = total_ev - total_bv
+    total_pct = (total_profit / total_bv * 100) if total_bv > 0 else 0
+    
+    # 델타(수정치)를 포함한 메트릭 표시
+    st.metric(
+        label="총 자산 평가액", 
+        value=f"${total_ev:,.2f}", 
+        delta=f"${total_profit:,.2f} ({total_pct:+.2f}%)"
+    )
+    
+    if data:
+        df = pd.DataFrame(data).sort_values("평가액", ascending=False)
+        st.dataframe(
+            df.style.format({
+                '현재가': '${:,.2f}', 
+                '수익률': '{:+.2f}%', 
+                '평가액': '${:,.2f}'
+            }), 
+            hide_index=True, 
+            use_container_width=True
+        )
 
 # [Tab 2] AI 예측
 elif menu == "🔮 AI예측":
